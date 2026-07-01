@@ -2,6 +2,7 @@
 
 #include <WiFi.h>
 #include <cstdlib>
+#include <cstring>
 #include "config/Config.h"
 #include "debug/DebugLog.h"
 #include "domain/TemperatureLogic.h"
@@ -13,9 +14,86 @@ constexpr unsigned long kNetworkScanCacheMs = 30000;
 constexpr unsigned long kNetworkScanFailureCacheMs = 5000;
 constexpr unsigned long kStationConnectPrepareMs = 250;
 
+struct StationAccessPoint {
+  bool found = false;
+  int channel = 0;
+  int rssi = 0;
+  uint8_t bssid[6] = {};
+  String bssidText;
+};
+
 bool isSensorDisconnected(float temperatureC)
 {
   return classifyTemperature(temperatureC) == TemperatureStatus::Disconnected;
+}
+
+bool isBestNetworkForSsid(int networkIndex, int networkCount)
+{
+  const String ssid = WiFi.SSID(networkIndex);
+  if (ssid.length() == 0) {
+    return true;
+  }
+
+  const int rssi = WiFi.RSSI(networkIndex);
+  for (int i = 0; i < networkCount; ++i) {
+    if (i == networkIndex || WiFi.SSID(i) != ssid) {
+      continue;
+    }
+
+    const int candidateRssi = WiFi.RSSI(i);
+    if (candidateRssi > rssi ||
+        (candidateRssi == rssi && i < networkIndex)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+int uniqueNetworkCount(int networkCount)
+{
+  int count = 0;
+  for (int i = 0; i < networkCount; ++i) {
+    if (isBestNetworkForSsid(i, networkCount)) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+bool findStrongestStationAccessPoint(const String &ssid,
+                                     StationAccessPoint &accessPoint)
+{
+  WiFi.scanDelete();
+  const int networkCount = WiFi.scanNetworks(false, true, false, 300);
+  if (networkCount < 0) {
+    WiFi.scanDelete();
+    return false;
+  }
+
+  for (int i = 0; i < networkCount; ++i) {
+    if (WiFi.SSID(i) != ssid) {
+      continue;
+    }
+
+    const int rssi = WiFi.RSSI(i);
+    if (accessPoint.found && rssi <= accessPoint.rssi) {
+      continue;
+    }
+
+    const uint8_t *bssid = WiFi.BSSID(i);
+    if (bssid == nullptr) {
+      continue;
+    }
+
+    accessPoint.found = true;
+    accessPoint.channel = WiFi.channel(i);
+    accessPoint.rssi = rssi;
+    accessPoint.bssidText = WiFi.BSSIDstr(i);
+    std::memcpy(accessPoint.bssid, bssid, sizeof(accessPoint.bssid));
+  }
+
+  WiFi.scanDelete();
+  return accessPoint.found;
 }
 
 } // namespace
@@ -102,9 +180,13 @@ void WebDashboard::setSettings(const AppSettings &settings)
   settings_ = sanitizedSettings(settings);
   persistedSettings_ = settings_;
   snapshot_.settings = settings_;
-  if (networkStarted_ &&
-      (settings_.stationSsid != previousSsid ||
-       settings_.stationPassword != previousPassword)) {
+  const bool stationForgotten =
+      previousSsid.length() > 0 && settings_.stationSsid.length() == 0;
+  if (stationForgotten) {
+    forgetStationNetwork();
+  } else if (networkStarted_ &&
+             (settings_.stationSsid != previousSsid ||
+              settings_.stationPassword != previousPassword)) {
     connectStation();
   }
 }
@@ -180,6 +262,8 @@ void WebDashboard::handleSaveSettings()
   snapshot_.settings = settings_;
   const bool stationChanged = settings_.stationSsid != previousSsid ||
                               settings_.stationPassword != previousPassword;
+  const bool stationForgotten =
+      previousSsid.length() > 0 && settings_.stationSsid.length() == 0;
   const bool stationNeedsTrial = stationChanged &&
                                  settings_.stationSsid.length() > 0;
 
@@ -194,7 +278,9 @@ void WebDashboard::handleSaveSettings()
     stationCredentialSavePending_ = false;
     persistedSettings_ = settings_;
     queueSettingsSave(settings_);
-    if (stationChanged) {
+    if (stationForgotten) {
+      forgetStationNetwork();
+    } else if (stationChanged) {
       connectStation();
     }
   }
@@ -493,6 +579,24 @@ void WebDashboard::discardUnconfirmedStationCredentials(int status,
   }
 }
 
+void WebDashboard::forgetStationNetwork()
+{
+  stationCredentialSavePending_ = false;
+  stationConnectPending_ = false;
+  stationConnecting_ = false;
+  stationReconnectAfterScan_ = false;
+  lastStationFailure_ = "";
+  if (!networkStarted_) {
+    return;
+  }
+
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, true);
+  WiFi.mode(WIFI_AP_STA);
+  notifyStartupProgress("WiFi STA forgotten", 0, 0);
+  DEBUG_PRINTLN("STA network forgotten");
+}
+
 void WebDashboard::connectStation()
 {
   if (!networkStarted_) {
@@ -541,9 +645,29 @@ void WebDashboard::startStationConnect()
   lastStationFailure_ = "";
   notifyStartupProgress("Connecting WiFi", 0,
                         Config::Network::StationConnectTimeoutMs);
-  if (settings_.stationPassword.length() == 0) {
+
+  StationAccessPoint accessPoint;
+  if (findStrongestStationAccessPoint(settings_.stationSsid, accessPoint)) {
+    DEBUG_PRINT("STA strongest AP: ");
+    DEBUG_PRINT(accessPoint.bssidText);
+    DEBUG_PRINT(" ch ");
+    DEBUG_PRINT(accessPoint.channel);
+    DEBUG_PRINT(" / ");
+    DEBUG_PRINT(accessPoint.rssi);
+    DEBUG_PRINTLN(" dBm");
+
+    WiFi.begin(settings_.stationSsid.c_str(),
+               settings_.stationPassword.length() == 0
+                   ? nullptr
+                   : settings_.stationPassword.c_str(),
+               accessPoint.channel,
+               accessPoint.bssid,
+               true);
+  } else if (settings_.stationPassword.length() == 0) {
+    DEBUG_PRINTLN("STA strongest AP not found; using default connect");
     WiFi.begin(settings_.stationSsid.c_str());
   } else {
+    DEBUG_PRINTLN("STA strongest AP not found; using default connect");
     WiFi.begin(settings_.stationSsid.c_str(), settings_.stationPassword.c_str());
   }
 }
@@ -723,16 +847,22 @@ String WebDashboard::networkScanJson(const char *status,
 
 String WebDashboard::completedNetworkScanJson(int networkCount) const
 {
+  const int visibleNetworkCount =
+      networkCount > 0 ? uniqueNetworkCount(networkCount) : 0;
   String json;
-  json.reserve(180 + (networkCount > 0 ? networkCount * 96 : 0));
+  json.reserve(180 + (visibleNetworkCount > 0 ? visibleNetworkCount * 96 : 0));
   json += "{\"ok\":true";
   json += ",\"scanResult\":";
   json += networkCount;
   json += ",\"scanStatus\":\"complete\"";
   json += ",\"networks\":[";
-  if (networkCount > 0) {
+  int emittedNetworkCount = 0;
+  if (visibleNetworkCount > 0) {
     for (int i = 0; i < networkCount; ++i) {
-      if (i > 0) {
+      if (!isBestNetworkForSsid(i, networkCount)) {
+        continue;
+      }
+      if (emittedNetworkCount > 0) {
         json += ",";
       }
       json += "{\"ssid\":";
@@ -744,10 +874,11 @@ String WebDashboard::completedNetworkScanJson(int networkCount) const
       json += ",\"encrypted\":";
       json += boolText(WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
       json += "}";
+      ++emittedNetworkCount;
     }
   }
   json += "],\"count\":";
-  json += networkCount > 0 ? networkCount : 0;
+  json += emittedNetworkCount;
   json += "}";
   return json;
 }
@@ -760,7 +891,7 @@ bool WebDashboard::readSettingsArgs(AppSettings &settings)
   unsigned long fanRunOnMs = 0;
   String stationSsid;
   String stationPassword;
-  bool clearStationPassword = false;
+  bool forgetStationNetwork = false;
 
   if (!readFloatArg("targetC", targetC) ||
       !readFloatArg("hysteresisC", hysteresisC) ||
@@ -773,8 +904,12 @@ bool WebDashboard::readSettingsArgs(AppSettings &settings)
       !readStringArg("stationPassword", stationPassword)) {
     return false;
   }
-  if (server_.hasArg("clearStationPassword") &&
-      !readBoolArg("clearStationPassword", clearStationPassword)) {
+  if (server_.hasArg("forgetStationNetwork") &&
+      !readBoolArg("forgetStationNetwork", forgetStationNetwork)) {
+    return false;
+  }
+  if (!forgetStationNetwork && server_.hasArg("clearStationPassword") &&
+      !readBoolArg("clearStationPassword", forgetStationNetwork)) {
     return false;
   }
 
@@ -782,10 +917,14 @@ bool WebDashboard::readSettingsArgs(AppSettings &settings)
   settings.hysteresisC = hysteresisC;
   settings.measurementIntervalMs = measurementIntervalMs;
   settings.fanRunOnMs = fanRunOnMs;
-  settings.stationSsid = stationSsid;
   settings.stationPassword = settings_.stationPassword;
   const bool stationSsidChanged = stationSsid != settings_.stationSsid;
-  if (clearStationPassword || stationSsid.length() == 0 ||
+  if (forgetStationNetwork) {
+    stationSsid = "";
+    stationPassword = "";
+  }
+  settings.stationSsid = stationSsid;
+  if (forgetStationNetwork || stationSsid.length() == 0 ||
       (stationSsidChanged && stationPassword.length() == 0)) {
     settings.stationPassword = "";
   } else if (stationPassword.length() > 0) {

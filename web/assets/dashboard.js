@@ -67,7 +67,12 @@
     if (rssi >= -75) return 'Fair';
     return 'Weak';
   };
-  const signalPercent = (rssi) => Math.max(0, Math.min(100, Math.round((Number(rssi) + 100) * 2)));
+  const signalLevel = (rssi) => {
+    const value = Number(rssi);
+    if (value >= -60) return 3;
+    if (value >= -72) return 2;
+    return 1;
+  };
 
   document.addEventListener('DOMContentLoaded', () => {
     const demoBadge = document.getElementById('demoBadge');
@@ -80,42 +85,87 @@
     const networkList = document.getElementById('networkList');
     const networkScanState = document.getElementById('networkScanState');
     const saveState = document.getElementById('saveState');
+    const stationSsidInput = document.getElementById('stationSsidInput');
+    const stationPasswordInput = document.getElementById('stationPasswordInput');
+    const toggleStationPassword = document.getElementById('toggleStationPassword');
+    const hiddenNetworkInput = document.getElementById('hiddenNetworkInput');
+    const forgetStationNetworkInput = document.getElementById('forgetStationNetworkInput');
+    const forgetStationNetwork = document.getElementById('forgetStationNetwork');
     let settingsDirty = false;
     let networkScanStartedAt = 0;
+    let currentSavedStationSsid = '';
+    let selectedNetworkSsid = '';
+    let visibleNetworkSsids = new Set();
+    const setHiddenNetworkMode = (enabled, keepValue) => {
+      hiddenNetworkInput.checked = enabled;
+      stationSsidInput.readOnly = !enabled;
+      stationSsidInput.placeholder = enabled ? 'Enter hidden network SSID' : 'Select from nearby networks';
+      if (enabled) {
+        selectedNetworkSsid = '';
+        if (!keepValue) stationSsidInput.value = '';
+      }
+      if (!enabled && selectedNetworkSsid) {
+        stationSsidInput.value = selectedNetworkSsid;
+      }
+    };
     const applySettingsToForm = (data) => {
       if (settingsDirty) return;
       document.getElementById('targetInput').value = Number(data.targetC).toFixed(1);
       document.getElementById('hysteresisInput').value = Number(data.hysteresisC).toFixed(1);
       document.getElementById('measurementInput').value = data.measurementIntervalMs;
       document.getElementById('fanRunOnInput').value = data.fanRunOnMs;
-      document.getElementById('stationSsidInput').value = data.stationSsid || '';
-      document.getElementById('stationPasswordInput').value = '';
-      document.getElementById('stationPasswordInput').placeholder = data.stationPasswordSet ? 'Saved; leave blank to keep' : 'Leave blank for open network';
-      document.getElementById('clearStationPasswordInput').checked = false;
+      currentSavedStationSsid = data.stationSsid || '';
+      selectedNetworkSsid = currentSavedStationSsid;
+      stationSsidInput.value = currentSavedStationSsid;
+      stationPasswordInput.value = '';
+      stationPasswordInput.type = 'password';
+      toggleStationPassword.textContent = 'Show';
+      toggleStationPassword.setAttribute('aria-pressed', 'false');
+      stationPasswordInput.placeholder = data.stationPasswordSet ? 'Saved; leave blank to keep' : 'Leave blank for open network';
+      forgetStationNetworkInput.value = '0';
+      setHiddenNetworkMode(false, true);
     };
     const renderNetworkStatus = (data) => {
       setText('apStatus', data.accessPointSsid || '--');
       setText('apPageStatus', pageUrl(data.accessPointIp));
-      setText('stationStatus', data.stationSsid ? (data.stationConnected ? data.stationSsid + ' / ' + data.stationRssi + ' dBm' : data.stationSsid + ' / ' + (data.stationStatus || 'disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
-      setText('stationPageStatus', data.stationConnected ? pageUrl(data.stationIp) : '--');
+      setText('stationStatus', data.stationSsid ? data.stationSsid : (data.stationLastFailure ? 'Failed' : 'Not connected'));
+      setText('stationPageStatus', data.stationConnected ? pageUrl(data.stationIp) : (data.stationSsid ? (data.stationStatus || 'disconnected') : 'Wi-Fi off'));
       setText('currentPageStatus', window.location.origin || '--');
     };
     const renderNetworks = (networks) => {
       networkList.textContent = '';
+      visibleNetworkSsids = new Set();
       if (!networks.length) {
         networkScanState.textContent = 'No 2.4 GHz networks found';
         return;
       }
       networkScanState.textContent = networks.length + ' found';
       networks.forEach((network) => {
+        if (network.ssid) visibleNetworkSsids.add(network.ssid);
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'network-item';
+        const selected = Boolean(network.ssid) && network.ssid === stationSsidInput.value && !hiddenNetworkInput.checked;
+        item.classList.toggle('selected', selected);
         item.addEventListener('click', () => {
-          document.getElementById('stationSsidInput').value = network.ssid || '';
+          if (network.ssid) {
+            selectedNetworkSsid = network.ssid;
+            forgetStationNetworkInput.value = '0';
+            setHiddenNetworkMode(false, false);
+          } else {
+            forgetStationNetworkInput.value = '0';
+            setHiddenNetworkMode(true, false);
+            stationSsidInput.focus();
+          }
+          renderNetworks(networks);
           settingsDirty = true;
           saveState.textContent = '';
         });
+
+        const icon = document.createElement('span');
+        icon.className = 'network-icon signal-' + signalLevel(network.rssi);
+        icon.setAttribute('aria-hidden', 'true');
+        icon.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
 
         const main = document.createElement('span');
         main.className = 'network-main';
@@ -130,12 +180,15 @@
         ].join(' / ');
         main.append(ssid, detail);
 
-        const meter = document.createElement('span');
-        meter.className = 'signal-meter';
-        const bar = document.createElement('span');
-        bar.style.width = signalPercent(network.rssi) + '%';
-        meter.append(bar);
-        item.append(main, meter);
+        const trailing = document.createElement('span');
+        trailing.className = 'network-trailing';
+        trailing.textContent = selected ? 'Selected' : (network.encrypted ? 'Secured' : '');
+        if (network.encrypted && !selected) {
+          const lock = document.createElement('span');
+          lock.className = 'lock-dot';
+          trailing.append(lock);
+        }
+        item.append(icon, main, trailing);
         networkList.append(item);
       });
     };
@@ -191,6 +244,29 @@
     settingsOpen.addEventListener('click', openSettings);
     settingsClose.addEventListener('click', closeSettings);
     scanNetworks.addEventListener('click', () => loadNetworks(false));
+    toggleStationPassword.addEventListener('click', () => {
+      const showing = stationPasswordInput.type === 'text';
+      stationPasswordInput.type = showing ? 'password' : 'text';
+      toggleStationPassword.textContent = showing ? 'Show' : 'Hide';
+      toggleStationPassword.setAttribute('aria-pressed', showing ? 'false' : 'true');
+      stationPasswordInput.focus();
+    });
+    hiddenNetworkInput.addEventListener('change', () => {
+      forgetStationNetworkInput.value = '0';
+      setHiddenNetworkMode(hiddenNetworkInput.checked, true);
+      settingsDirty = true;
+      saveState.textContent = '';
+      if (hiddenNetworkInput.checked) stationSsidInput.focus();
+    });
+    forgetStationNetwork.addEventListener('click', () => {
+      selectedNetworkSsid = '';
+      stationSsidInput.value = '';
+      stationPasswordInput.value = '';
+      forgetStationNetworkInput.value = '1';
+      setHiddenNetworkMode(false, true);
+      settingsDirty = true;
+      saveState.textContent = 'Network will be forgotten on save';
+    });
     settingsOverlay.addEventListener('click', (event) => {
       if (event.target === settingsOverlay) closeSettings();
     });
@@ -233,6 +309,20 @@
     });
     settingsForm.addEventListener('submit', async (event) => {
       event.preventDefault();
+      stationSsidInput.value = stationSsidInput.value.trim();
+      const stationSsidChanged = stationSsidInput.value !== currentSavedStationSsid;
+      if (!hiddenNetworkInput.checked &&
+          stationSsidChanged &&
+          stationSsidInput.value.length > 0 &&
+          !visibleNetworkSsids.has(stationSsidInput.value)) {
+        saveState.textContent = 'Scan and select a network first';
+        return;
+      }
+      if (hiddenNetworkInput.checked && stationSsidInput.value.length === 0) {
+        saveState.textContent = 'Enter hidden network SSID';
+        stationSsidInput.focus();
+        return;
+      }
       saveState.textContent = 'Saving...';
       try {
         const body = new URLSearchParams(new FormData(settingsForm));

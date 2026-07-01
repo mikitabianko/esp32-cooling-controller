@@ -93,26 +93,62 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 .settings-overlay.open { display: flex; }
 .settings-dialog { width: min(620px, 100%); max-height: calc(100vh - 36px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: var(--shadow); }
 .settings-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+#settingsForm { padding: 16px; gap: 16px; }
 .settings-section { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
 .settings-section:first-child { padding-top: 0; border-top: 0; }
 .section-title { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 13px; font-weight: 700; text-transform: uppercase; }
-.network-status { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
-.status-line { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--bg); }
-.status-line strong { display: block; color: var(--muted); font-size: 12px; font-weight: 700; }
-.status-line span { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 14px; }
-.scan-panel { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg); }
-.scan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.scan-head strong { color: var(--muted); font-size: 12px; text-transform: uppercase; }
-.scan-state { margin-top: 8px; color: var(--muted); font-size: 13px; }
-.network-list { display: grid; gap: 7px; margin-top: 8px; }
-.network-item { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 10px; align-items: center; width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--card); color: var(--text); text-align: left; }
-.network-main { min-width: 0; display: grid; gap: 3px; }
+.android-network { grid-column: 1 / -1; display: grid; gap: 10px; }
+.internet-status { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 14px; align-items: center; min-height: 56px; border-bottom: 1px solid var(--border); padding: 4px 2px 12px; }
+.internet-main { min-width: 0; display: grid; gap: 2px; }
+.internet-main strong { overflow-wrap: anywhere; font-size: 16px; font-weight: 650; }
+.internet-main span { overflow-wrap: anywhere; color: var(--muted); font-size: 13px; }
+.network-status { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.status-line { min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.status-line strong { display: block; color: var(--muted); font-size: 12px; font-weight: 650; }
+.status-line span { display: block; margin-top: 3px; overflow-wrap: anywhere; font-size: 13px; }
+.scan-panel { grid-column: 1 / -1; display: grid; gap: 6px; padding-top: 8px; }
+.scan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; }
+.scan-head span { display: grid; gap: 2px; }
+.scan-head strong { font-size: 15px; font-weight: 650; }
+.scan-head small { color: var(--muted); font-size: 12px; }
+.network-list { display: grid; }
+.network-item { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 14px; align-items: center; width: 100%; min-height: 58px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 8px 2px; background: transparent; color: var(--text); text-align: left; }
+.network-item.selected { color: var(--primary); }
 .network-main strong,
 .network-main span { overflow-wrap: anywhere; }
-.network-main strong { font-size: 14px; }
+.network-main { min-width: 0; display: grid; gap: 2px; }
+.network-main strong { font-size: 15px; font-weight: 600; }
 .network-main span { color: var(--muted); font-size: 12px; }
-.signal-meter { height: 8px; overflow: hidden; border-radius: 999px; background: var(--border); }
-.signal-meter span { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
+.network-trailing { min-width: 42px; color: var(--muted); font-size: 12px; text-align: right; }
+.network-item.selected .network-trailing { color: var(--primary); font-weight: 650; }
+.network-icon { position: relative; display: block; width: 26px; height: 24px; color: var(--muted); }
+.network-icon i { position: absolute; bottom: 2px; width: 5px; border-radius: 999px; background: currentColor; opacity: 0.35; }
+.network-icon i:nth-child(1) { left: 3px; height: 7px; }
+.network-icon i:nth-child(2) { left: 10px; height: 13px; }
+.network-icon i:nth-child(3) { left: 17px; height: 19px; }
+.network-icon.signal-1 i:nth-child(1),
+.network-icon.signal-2 i:nth-child(-n + 2),
+.network-icon.signal-3 i { opacity: 1; }
+.network-item.selected .network-icon { color: var(--primary); }
+.lock-dot { display: inline-block; width: 7px; height: 7px; margin-left: 4px; border-radius: 999px; background: currentColor; opacity: 0.72; vertical-align: 1px; }
+.network-details { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 12px; }
+.network-field { display: grid; gap: 6px; min-width: 0; padding: 0; color: var(--muted); font-size: 12px; font-weight: 650; }
+.network-field input { margin: 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 3px 0 8px; background: transparent; color: var(--text); font-size: 15px; font-weight: 500; outline: 0; }
+.network-field input:focus { border-color: var(--primary); }
+.network-field input::placeholder { color: var(--muted); opacity: 0.86; }
+.network-field > span:last-child { color: var(--muted); font-size: 11px; font-weight: 400; }
+.password-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.password-control button { min-width: 44px; padding: 4px 0 8px; border-radius: 0; color: var(--primary); background: transparent; font-size: 12px; font-weight: 650; }
+.forget-network { justify-self: start; padding: 0; background: transparent; color: var(--bad); font-size: 13px; font-weight: 650; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; color: var(--text); }
+.switch-row strong { display: block; font-size: 14px; font-weight: 600; }
+.switch-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.switch { position: relative; width: 48px; height: 28px; flex: 0 0 auto; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--border); }
+.switch span::after { content: ""; position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; background: var(--card); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); transition: transform 140ms ease; }
+.switch input:checked + span { background: var(--primary); }
+.switch input:checked + span::after { transform: translateX(20px); }
 .form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; grid-column: 1 / -1; margin-top: 4px; }
 #saveState { color: var(--muted); font-size: 13px; }
 
@@ -166,24 +202,40 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
         </section>
         <section class="settings-section">
           <h3 class="section-title">Network</h3>
-          <div class="network-status">
-            <div class="status-line"><strong>Own network</strong><span id="apStatus">--</span></div>
-            <div class="status-line"><strong>Own page</strong><span id="apPageStatus">--</span></div>
-            <div class="status-line"><strong>Connected network</strong><span id="stationStatus">--</span></div>
-            <div class="status-line"><strong>Connected page</strong><span id="stationPageStatus">--</span></div>
-            <div class="status-line"><strong>Current page</strong><span id="currentPageStatus">--</span></div>
+          <div class="android-network">
+            <div class="internet-status">
+              <span class="network-icon signal-3" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="internet-main">
+                <strong id="stationStatus">--</strong>
+                <span id="stationPageStatus">--</span>
+              </span>
+            </div>
+            <div class="network-status">
+              <div class="status-line"><strong>Device hotspot</strong><span id="apStatus">--</span></div>
+              <div class="status-line"><strong>Hotspot page</strong><span id="apPageStatus">--</span></div>
+              <div class="status-line"><strong>Current page</strong><span id="currentPageStatus">--</span></div>
+            </div>
           </div>
           <div class="scan-panel">
             <div class="scan-head">
-              <strong>Nearby networks</strong>
-              <button id="scanNetworks" type="button">Scan</button>
+              <span>
+                <strong>Available networks</strong>
+                <small id="networkScanState">Not scanned yet</small>
+              </span>
+              <button id="scanNetworks" type="button">Refresh</button>
             </div>
-            <div id="networkScanState" class="scan-state">Not scanned yet</div>
             <div id="networkList" class="network-list" aria-live="polite"></div>
           </div>
-          <label class="label">Network SSID<input id="stationSsidInput" name="stationSsid" type="text" maxlength="32" autocomplete="off"></label>
-          <label class="label">Network password<input id="stationPasswordInput" name="stationPassword" type="password" maxlength="64" autocomplete="new-password" placeholder="Leave blank to keep saved"></label>
-          <label class="check"><input id="clearStationPasswordInput" name="clearStationPassword" type="checkbox" value="1"> Clear saved password</label>
+          <div class="network-details">
+            <label class="network-field">Network name<input id="stationSsidInput" name="stationSsid" type="text" maxlength="32" autocomplete="off" placeholder="Select a network" readonly><span>Select from the list or enable hidden network</span></label>
+            <label class="network-field password-field">Password<span class="password-control"><input id="stationPasswordInput" name="stationPassword" type="password" maxlength="64" autocomplete="new-password" placeholder="Leave blank to keep saved"><button id="toggleStationPassword" type="button" aria-pressed="false">Show</button></span><span>Leave blank to keep the saved password</span></label>
+            <label class="switch-row">
+              <span><strong>Hidden network</strong><small>Manual SSID</small></span>
+              <span class="switch"><input id="hiddenNetworkInput" name="hiddenNetwork" type="checkbox" value="1"><span></span></span>
+            </label>
+            <input id="forgetStationNetworkInput" name="forgetStationNetwork" type="hidden" value="0">
+            <button id="forgetStationNetwork" class="forget-network" type="button">Forget network</button>
+          </div>
         </section>
         <div class="form-actions">
           <span id="saveState"></span>
@@ -318,7 +370,12 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     if (rssi >= -75) return 'Fair';
     return 'Weak';
   };
-  const signalPercent = (rssi) => Math.max(0, Math.min(100, Math.round((Number(rssi) + 100) * 2)));
+  const signalLevel = (rssi) => {
+    const value = Number(rssi);
+    if (value >= -60) return 3;
+    if (value >= -72) return 2;
+    return 1;
+  };
 
   document.addEventListener('DOMContentLoaded', () => {
     const demoBadge = document.getElementById('demoBadge');
@@ -331,42 +388,87 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     const networkList = document.getElementById('networkList');
     const networkScanState = document.getElementById('networkScanState');
     const saveState = document.getElementById('saveState');
+    const stationSsidInput = document.getElementById('stationSsidInput');
+    const stationPasswordInput = document.getElementById('stationPasswordInput');
+    const toggleStationPassword = document.getElementById('toggleStationPassword');
+    const hiddenNetworkInput = document.getElementById('hiddenNetworkInput');
+    const forgetStationNetworkInput = document.getElementById('forgetStationNetworkInput');
+    const forgetStationNetwork = document.getElementById('forgetStationNetwork');
     let settingsDirty = false;
     let networkScanStartedAt = 0;
+    let currentSavedStationSsid = '';
+    let selectedNetworkSsid = '';
+    let visibleNetworkSsids = new Set();
+    const setHiddenNetworkMode = (enabled, keepValue) => {
+      hiddenNetworkInput.checked = enabled;
+      stationSsidInput.readOnly = !enabled;
+      stationSsidInput.placeholder = enabled ? 'Enter hidden network SSID' : 'Select from nearby networks';
+      if (enabled) {
+        selectedNetworkSsid = '';
+        if (!keepValue) stationSsidInput.value = '';
+      }
+      if (!enabled && selectedNetworkSsid) {
+        stationSsidInput.value = selectedNetworkSsid;
+      }
+    };
     const applySettingsToForm = (data) => {
       if (settingsDirty) return;
       document.getElementById('targetInput').value = Number(data.targetC).toFixed(1);
       document.getElementById('hysteresisInput').value = Number(data.hysteresisC).toFixed(1);
       document.getElementById('measurementInput').value = data.measurementIntervalMs;
       document.getElementById('fanRunOnInput').value = data.fanRunOnMs;
-      document.getElementById('stationSsidInput').value = data.stationSsid || '';
-      document.getElementById('stationPasswordInput').value = '';
-      document.getElementById('stationPasswordInput').placeholder = data.stationPasswordSet ? 'Saved; leave blank to keep' : 'Leave blank for open network';
-      document.getElementById('clearStationPasswordInput').checked = false;
+      currentSavedStationSsid = data.stationSsid || '';
+      selectedNetworkSsid = currentSavedStationSsid;
+      stationSsidInput.value = currentSavedStationSsid;
+      stationPasswordInput.value = '';
+      stationPasswordInput.type = 'password';
+      toggleStationPassword.textContent = 'Show';
+      toggleStationPassword.setAttribute('aria-pressed', 'false');
+      stationPasswordInput.placeholder = data.stationPasswordSet ? 'Saved; leave blank to keep' : 'Leave blank for open network';
+      forgetStationNetworkInput.value = '0';
+      setHiddenNetworkMode(false, true);
     };
     const renderNetworkStatus = (data) => {
       setText('apStatus', data.accessPointSsid || '--');
       setText('apPageStatus', pageUrl(data.accessPointIp));
-      setText('stationStatus', data.stationSsid ? (data.stationConnected ? data.stationSsid + ' / ' + data.stationRssi + ' dBm' : data.stationSsid + ' / ' + (data.stationStatus || 'disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
-      setText('stationPageStatus', data.stationConnected ? pageUrl(data.stationIp) : '--');
+      setText('stationStatus', data.stationSsid ? data.stationSsid : (data.stationLastFailure ? 'Failed' : 'Not connected'));
+      setText('stationPageStatus', data.stationConnected ? pageUrl(data.stationIp) : (data.stationSsid ? (data.stationStatus || 'disconnected') : 'Wi-Fi off'));
       setText('currentPageStatus', window.location.origin || '--');
     };
     const renderNetworks = (networks) => {
       networkList.textContent = '';
+      visibleNetworkSsids = new Set();
       if (!networks.length) {
         networkScanState.textContent = 'No 2.4 GHz networks found';
         return;
       }
       networkScanState.textContent = networks.length + ' found';
       networks.forEach((network) => {
+        if (network.ssid) visibleNetworkSsids.add(network.ssid);
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'network-item';
+        const selected = Boolean(network.ssid) && network.ssid === stationSsidInput.value && !hiddenNetworkInput.checked;
+        item.classList.toggle('selected', selected);
         item.addEventListener('click', () => {
-          document.getElementById('stationSsidInput').value = network.ssid || '';
+          if (network.ssid) {
+            selectedNetworkSsid = network.ssid;
+            forgetStationNetworkInput.value = '0';
+            setHiddenNetworkMode(false, false);
+          } else {
+            forgetStationNetworkInput.value = '0';
+            setHiddenNetworkMode(true, false);
+            stationSsidInput.focus();
+          }
+          renderNetworks(networks);
           settingsDirty = true;
           saveState.textContent = '';
         });
+
+        const icon = document.createElement('span');
+        icon.className = 'network-icon signal-' + signalLevel(network.rssi);
+        icon.setAttribute('aria-hidden', 'true');
+        icon.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
 
         const main = document.createElement('span');
         main.className = 'network-main';
@@ -381,12 +483,15 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
         ].join(' / ');
         main.append(ssid, detail);
 
-        const meter = document.createElement('span');
-        meter.className = 'signal-meter';
-        const bar = document.createElement('span');
-        bar.style.width = signalPercent(network.rssi) + '%';
-        meter.append(bar);
-        item.append(main, meter);
+        const trailing = document.createElement('span');
+        trailing.className = 'network-trailing';
+        trailing.textContent = selected ? 'Selected' : (network.encrypted ? 'Secured' : '');
+        if (network.encrypted && !selected) {
+          const lock = document.createElement('span');
+          lock.className = 'lock-dot';
+          trailing.append(lock);
+        }
+        item.append(icon, main, trailing);
         networkList.append(item);
       });
     };
@@ -442,6 +547,29 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     settingsOpen.addEventListener('click', openSettings);
     settingsClose.addEventListener('click', closeSettings);
     scanNetworks.addEventListener('click', () => loadNetworks(false));
+    toggleStationPassword.addEventListener('click', () => {
+      const showing = stationPasswordInput.type === 'text';
+      stationPasswordInput.type = showing ? 'password' : 'text';
+      toggleStationPassword.textContent = showing ? 'Show' : 'Hide';
+      toggleStationPassword.setAttribute('aria-pressed', showing ? 'false' : 'true');
+      stationPasswordInput.focus();
+    });
+    hiddenNetworkInput.addEventListener('change', () => {
+      forgetStationNetworkInput.value = '0';
+      setHiddenNetworkMode(hiddenNetworkInput.checked, true);
+      settingsDirty = true;
+      saveState.textContent = '';
+      if (hiddenNetworkInput.checked) stationSsidInput.focus();
+    });
+    forgetStationNetwork.addEventListener('click', () => {
+      selectedNetworkSsid = '';
+      stationSsidInput.value = '';
+      stationPasswordInput.value = '';
+      forgetStationNetworkInput.value = '1';
+      setHiddenNetworkMode(false, true);
+      settingsDirty = true;
+      saveState.textContent = 'Network will be forgotten on save';
+    });
     settingsOverlay.addEventListener('click', (event) => {
       if (event.target === settingsOverlay) closeSettings();
     });
@@ -484,6 +612,20 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     });
     settingsForm.addEventListener('submit', async (event) => {
       event.preventDefault();
+      stationSsidInput.value = stationSsidInput.value.trim();
+      const stationSsidChanged = stationSsidInput.value !== currentSavedStationSsid;
+      if (!hiddenNetworkInput.checked &&
+          stationSsidChanged &&
+          stationSsidInput.value.length > 0 &&
+          !visibleNetworkSsids.has(stationSsidInput.value)) {
+        saveState.textContent = 'Scan and select a network first';
+        return;
+      }
+      if (hiddenNetworkInput.checked && stationSsidInput.value.length === 0) {
+        saveState.textContent = 'Enter hidden network SSID';
+        stationSsidInput.focus();
+        return;
+      }
       saveState.textContent = 'Saving...';
       try {
         const body = new URLSearchParams(new FormData(settingsForm));
@@ -604,26 +746,62 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 .settings-overlay.open { display: flex; }
 .settings-dialog { width: min(620px, 100%); max-height: calc(100vh - 36px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: var(--shadow); }
 .settings-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+#settingsForm { padding: 16px; gap: 16px; }
 .settings-section { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
 .settings-section:first-child { padding-top: 0; border-top: 0; }
 .section-title { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 13px; font-weight: 700; text-transform: uppercase; }
-.network-status { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; }
-.status-line { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--bg); }
-.status-line strong { display: block; color: var(--muted); font-size: 12px; font-weight: 700; }
-.status-line span { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 14px; }
-.scan-panel { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg); }
-.scan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.scan-head strong { color: var(--muted); font-size: 12px; text-transform: uppercase; }
-.scan-state { margin-top: 8px; color: var(--muted); font-size: 13px; }
-.network-list { display: grid; gap: 7px; margin-top: 8px; }
-.network-item { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 10px; align-items: center; width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--card); color: var(--text); text-align: left; }
-.network-main { min-width: 0; display: grid; gap: 3px; }
+.android-network { grid-column: 1 / -1; display: grid; gap: 10px; }
+.internet-status { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 14px; align-items: center; min-height: 56px; border-bottom: 1px solid var(--border); padding: 4px 2px 12px; }
+.internet-main { min-width: 0; display: grid; gap: 2px; }
+.internet-main strong { overflow-wrap: anywhere; font-size: 16px; font-weight: 650; }
+.internet-main span { overflow-wrap: anywhere; color: var(--muted); font-size: 13px; }
+.network-status { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.status-line { min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.status-line strong { display: block; color: var(--muted); font-size: 12px; font-weight: 650; }
+.status-line span { display: block; margin-top: 3px; overflow-wrap: anywhere; font-size: 13px; }
+.scan-panel { grid-column: 1 / -1; display: grid; gap: 6px; padding-top: 8px; }
+.scan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; }
+.scan-head span { display: grid; gap: 2px; }
+.scan-head strong { font-size: 15px; font-weight: 650; }
+.scan-head small { color: var(--muted); font-size: 12px; }
+.network-list { display: grid; }
+.network-item { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 14px; align-items: center; width: 100%; min-height: 58px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 8px 2px; background: transparent; color: var(--text); text-align: left; }
+.network-item.selected { color: var(--primary); }
 .network-main strong,
 .network-main span { overflow-wrap: anywhere; }
-.network-main strong { font-size: 14px; }
+.network-main { min-width: 0; display: grid; gap: 2px; }
+.network-main strong { font-size: 15px; font-weight: 600; }
 .network-main span { color: var(--muted); font-size: 12px; }
-.signal-meter { height: 8px; overflow: hidden; border-radius: 999px; background: var(--border); }
-.signal-meter span { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
+.network-trailing { min-width: 42px; color: var(--muted); font-size: 12px; text-align: right; }
+.network-item.selected .network-trailing { color: var(--primary); font-weight: 650; }
+.network-icon { position: relative; display: block; width: 26px; height: 24px; color: var(--muted); }
+.network-icon i { position: absolute; bottom: 2px; width: 5px; border-radius: 999px; background: currentColor; opacity: 0.35; }
+.network-icon i:nth-child(1) { left: 3px; height: 7px; }
+.network-icon i:nth-child(2) { left: 10px; height: 13px; }
+.network-icon i:nth-child(3) { left: 17px; height: 19px; }
+.network-icon.signal-1 i:nth-child(1),
+.network-icon.signal-2 i:nth-child(-n + 2),
+.network-icon.signal-3 i { opacity: 1; }
+.network-item.selected .network-icon { color: var(--primary); }
+.lock-dot { display: inline-block; width: 7px; height: 7px; margin-left: 4px; border-radius: 999px; background: currentColor; opacity: 0.72; vertical-align: 1px; }
+.network-details { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 12px; }
+.network-field { display: grid; gap: 6px; min-width: 0; padding: 0; color: var(--muted); font-size: 12px; font-weight: 650; }
+.network-field input { margin: 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 3px 0 8px; background: transparent; color: var(--text); font-size: 15px; font-weight: 500; outline: 0; }
+.network-field input:focus { border-color: var(--primary); }
+.network-field input::placeholder { color: var(--muted); opacity: 0.86; }
+.network-field > span:last-child { color: var(--muted); font-size: 11px; font-weight: 400; }
+.password-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.password-control button { min-width: 44px; padding: 4px 0 8px; border-radius: 0; color: var(--primary); background: transparent; font-size: 12px; font-weight: 650; }
+.forget-network { justify-self: start; padding: 0; background: transparent; color: var(--bad); font-size: 13px; font-weight: 650; }
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; color: var(--text); }
+.switch-row strong { display: block; font-size: 14px; font-weight: 600; }
+.switch-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+.switch { position: relative; width: 48px; height: 28px; flex: 0 0 auto; }
+.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--border); }
+.switch span::after { content: ""; position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; background: var(--card); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); transition: transform 140ms ease; }
+.switch input:checked + span { background: var(--primary); }
+.switch input:checked + span::after { transform: translateX(20px); }
 .form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; grid-column: 1 / -1; margin-top: 4px; }
 #saveState { color: var(--muted); font-size: 13px; }
 

@@ -68,6 +68,7 @@ private:
   void saveConfirmedStationCredentials();
   void discardUnconfirmedStationCredentials(int status,
                                             unsigned long elapsedMs);
+  void forgetStationNetwork();
   void connectStation();
   void prepareStationConnect();
   void startStationConnect();
