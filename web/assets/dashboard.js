@@ -1,10 +1,222 @@
 (function () {
   const { readStoredDevState, setText } = window.CoolingWeb;
   const startedAt = Date.now();
+  const chartHistoryMs = 30 * 60 * 1000;
+  const temperatureSeries = [
+    {
+      id: 'probe1',
+      label: 'Probe 1',
+      valueKey: 'temperatureC',
+      hasKey: 'hasTemperature',
+      invalidKey: 'sensorDisconnected',
+      updateCountKey: 'updateCount',
+      colorVar: '--chart-primary',
+      primary: true
+    },
+    {
+      id: 'probe2',
+      label: 'Probe 2',
+      valueKey: 'secondaryTemperatureC',
+      hasKey: 'hasSecondaryTemperature',
+      invalidKey: 'secondarySensorDisconnected',
+      updateCountKey: 'secondaryUpdateCount',
+      colorVar: '--chart-secondary'
+    }
+  ];
+  const chartSamples = new Map(temperatureSeries.map((series) => [series.id, []]));
+  const lastChartSampleKeys = new Map();
+  let lastChartUptimeMs = 0;
   const setState = (id, on) => {
     const el = document.getElementById(id);
     el.textContent = on ? 'ON' : 'OFF';
     el.className = 'value small ' + (on ? 'ok' : '');
+  };
+  const isSeriesAvailable = (series, data) => (
+    series.primary || Object.prototype.hasOwnProperty.call(data, series.valueKey)
+  );
+  const hasValidSeriesValue = (series, data) => {
+    const value = Number(data[series.valueKey]);
+    const hasValue = series.hasKey ? Boolean(data[series.hasKey]) : Number.isFinite(value);
+    const invalid = series.invalidKey ? Boolean(data[series.invalidKey]) : false;
+    return hasValue && !invalid && Number.isFinite(value);
+  };
+  const sampleTimeMs = (data) => {
+    const uptimeMs = Number(data.uptimeMs);
+    return Number.isFinite(uptimeMs) ? uptimeMs : Date.now() - startedAt;
+  };
+  const trimChartSamples = (samples, latestTimeMs) => {
+    const cutoffMs = latestTimeMs - chartHistoryMs;
+    while (samples.length && samples[0].timeMs < cutoffMs) {
+      samples.shift();
+    }
+  };
+  const addSeriesSample = (series, timeMs, value) => {
+    const samples = chartSamples.get(series.id);
+    if (!samples || !Number.isFinite(timeMs) || !Number.isFinite(value)) return;
+    if (samples.some((sample) => sample.timeMs === timeMs)) return;
+    samples.push({ timeMs, value });
+    samples.sort((left, right) => left.timeMs - right.timeMs);
+    trimChartSamples(samples, Math.max(timeMs, lastChartUptimeMs));
+  };
+  const addChartSample = (data) => {
+    const timeMs = sampleTimeMs(data);
+    if (timeMs + 1000 < lastChartUptimeMs) {
+      chartSamples.forEach((samples) => samples.splice(0, samples.length));
+      lastChartSampleKeys.clear();
+    }
+    lastChartUptimeMs = timeMs;
+
+    temperatureSeries.forEach((series) => {
+      if (!isSeriesAvailable(series, data)) return;
+      const samples = chartSamples.get(series.id);
+      const count = series.updateCountKey && data[series.updateCountKey] !== undefined
+        ? data[series.updateCountKey]
+        : Math.floor(timeMs / 1000);
+      const sampleKey = String(count) + ':' + String(data[series.valueKey]);
+      if (lastChartSampleKeys.get(series.id) === sampleKey) return;
+      lastChartSampleKeys.set(series.id, sampleKey);
+      if (hasValidSeriesValue(series, data)) {
+        addSeriesSample(series, timeMs, Number(data[series.valueKey]));
+      } else {
+        trimChartSamples(samples, timeMs);
+      }
+    });
+  };
+  const applyHistory = (history) => {
+    if (!history || !Array.isArray(history.series)) return;
+    history.series.forEach((remoteSeries) => {
+      const series = temperatureSeries.find((item) => item.id === remoteSeries.id);
+      if (!series || !Array.isArray(remoteSeries.points)) return;
+      remoteSeries.points.forEach((point) => {
+        if (!Array.isArray(point) || point.length < 2) return;
+        const flags = Number(point[2]) || 0;
+        if ((flags & 1) !== 0) return;
+        addSeriesSample(series, Number(point[0]), Number(point[1]) / 10);
+      });
+    });
+  };
+  const loadHistory = async () => {
+    try {
+      const res = await fetch('/api/history', { cache: 'no-store' });
+      if (!res.ok) throw new Error('history unavailable');
+      applyHistory(await res.json());
+      drawTemperatureChart();
+    } catch (error) {
+      // History is optional; live samples will continue filling the chart.
+    }
+  };
+  const formatAgo = (ms) => {
+    const minutes = Math.max(0, Math.round(ms / 60000));
+    return minutes <= 0 ? 'now' : '-' + minutes + ' min';
+  };
+  const chartColors = (canvas, series) => {
+    const style = getComputedStyle(document.documentElement);
+    return {
+      text: style.getPropertyValue('--muted').trim(),
+      grid: style.getPropertyValue('--chart-grid').trim(),
+      line: style.getPropertyValue(series.colorVar).trim()
+    };
+  };
+  const renderChartLegend = (legend) => {
+    legend.textContent = '';
+    temperatureSeries.filter((series) => chartSamples.get(series.id).length > 0).forEach((series) => {
+      const item = document.createElement('span');
+      item.className = 'legend-item';
+      item.style.color = getComputedStyle(document.documentElement).getPropertyValue(series.colorVar).trim();
+      const swatch = document.createElement('span');
+      swatch.className = 'legend-swatch';
+      const label = document.createElement('span');
+      label.textContent = series.label;
+      item.append(swatch, label);
+      legend.append(item);
+    });
+  };
+  const drawTemperatureChart = () => {
+    const canvas = document.getElementById('temperatureChart');
+    const empty = document.getElementById('chartEmpty');
+    const legend = document.getElementById('chartLegend');
+    if (!canvas || !empty || !legend) return;
+
+    const allSamples = temperatureSeries.flatMap((series) => chartSamples.get(series.id));
+    empty.classList.toggle('hidden', allSamples.length > 0);
+    renderChartLegend(legend);
+
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.round(rect.width * dpr));
+    const height = Math.max(1, Math.round(rect.height * dpr));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, width, height);
+    if (!allSamples.length) return;
+
+    const nowMs = Math.max(...allSamples.map((sample) => sample.timeMs));
+    const startMs = Math.max(0, nowMs - chartHistoryMs);
+    const minValue = Math.min(...allSamples.map((sample) => sample.value));
+    const maxValue = Math.max(...allSamples.map((sample) => sample.value));
+    const valuePadding = Math.max(0.5, (maxValue - minValue) * 0.18);
+    const yMin = Math.floor((minValue - valuePadding) * 2) / 2;
+    const yMax = Math.ceil((maxValue + valuePadding) * 2) / 2;
+    const span = Math.max(1, yMax - yMin);
+    const pad = {
+      left: 42 * dpr,
+      right: 10 * dpr,
+      top: 12 * dpr,
+      bottom: 28 * dpr
+    };
+    const plotW = Math.max(1, width - pad.left - pad.right);
+    const plotH = Math.max(1, height - pad.top - pad.bottom);
+    const axisColor = chartColors(canvas, temperatureSeries[0]);
+    const xFor = (timeMs) => pad.left + ((timeMs - startMs) / chartHistoryMs) * plotW;
+    const yFor = (value) => pad.top + (1 - ((value - yMin) / span)) * plotH;
+
+    ctx.font = String(11 * dpr) + 'px system-ui, sans-serif';
+    ctx.lineWidth = 1 * dpr;
+    ctx.strokeStyle = axisColor.grid;
+    ctx.fillStyle = axisColor.text;
+    ctx.textBaseline = 'middle';
+
+    for (let i = 0; i <= 4; i += 1) {
+      const y = pad.top + (plotH / 4) * i;
+      const value = yMax - (span / 4) * i;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(width - pad.right, y);
+      ctx.stroke();
+      ctx.textAlign = 'right';
+      ctx.fillText(value.toFixed(1), pad.left - 8 * dpr, y);
+    }
+
+    ctx.textBaseline = 'top';
+    for (let i = 0; i <= 3; i += 1) {
+      const x = pad.left + (plotW / 3) * i;
+      const ageMs = chartHistoryMs - (chartHistoryMs / 3) * i;
+      ctx.beginPath();
+      ctx.moveTo(x, pad.top);
+      ctx.lineTo(x, pad.top + plotH);
+      ctx.stroke();
+      ctx.textAlign = i === 0 ? 'left' : (i === 3 ? 'right' : 'center');
+      ctx.fillText(formatAgo(ageMs), x, pad.top + plotH + 8 * dpr);
+    }
+
+    temperatureSeries.forEach((series) => {
+      const samples = chartSamples.get(series.id).filter((sample) => sample.timeMs >= startMs);
+      if (!samples.length) return;
+      ctx.strokeStyle = chartColors(canvas, series).line;
+      ctx.lineWidth = 2 * dpr;
+      ctx.beginPath();
+      samples.forEach((sample, index) => {
+        const x = xFor(sample.timeMs);
+        const y = yFor(sample.value);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    });
   };
   const mockStatus = () => {
     const elapsedMs = Date.now() - startedAt;
@@ -287,6 +499,7 @@
     }
     async function refresh() {
       const data = await loadStatus();
+      addChartSample(data);
       demoBadge.classList.toggle('hidden', !data.demo);
       devBadge.classList.toggle('hidden', !data.devMode);
       setText('temperature', data.hasTemperature ? data.temperatureC.toFixed(1) + ' C' : '--');
@@ -302,6 +515,7 @@
       setText('wifi', data.stationSsid ? (data.stationConnected ? data.stationIp : (data.stationStatus || 'Disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
       renderNetworkStatus(data);
       applySettingsToForm(data);
+      drawTemperatureChart();
     }
     settingsForm.addEventListener('input', () => {
       settingsDirty = true;
@@ -341,6 +555,11 @@
         saveState.textContent = 'Save failed';
       }
     });
+    window.addEventListener('resize', drawTemperatureChart);
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      window.setTimeout(drawTemperatureChart, 0);
+    });
+    loadHistory();
     refresh();
     setInterval(refresh, 1000);
   });

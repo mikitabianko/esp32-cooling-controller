@@ -25,6 +25,12 @@ struct DevDashboardState {
   CoolingState coolingState;
 };
 
+struct TemperatureHistorySample {
+  unsigned long uptimeMs = 0;
+  int16_t temperatureCx10 = 0;
+  uint8_t flags = 0;
+};
+
 class WebDashboard {
 public:
   using StartupProgressHandler = void (*)(void *context,
@@ -44,8 +50,13 @@ public:
   IPAddress ipAddress() const;
 
 private:
+  static constexpr size_t kTemperatureHistoryCapacity = 720;
+  static constexpr unsigned long kTemperatureHistoryMinIntervalMs = 10000;
+  static constexpr uint8_t kTemperatureHistoryDisconnectedFlag = 1U;
+
   void handlePage();
   void handleStatus();
+  void handleHistory();
   void handleGetDevState();
   void handleSaveDevState();
   void handleGetSettings();
@@ -53,6 +64,7 @@ private:
   void handleNetworks();
   void handleNotFound();
   String statusJson() const;
+  String historyJson() const;
   String settingsJson() const;
   String networksJson();
   String devJson() const;
@@ -86,6 +98,7 @@ private:
   bool readIntArg(const char *name, int &value);
   bool readFloatArg(const char *name, float &value);
   bool readUnsignedLongArg(const char *name, unsigned long &value);
+  void recordTemperatureHistory(const DashboardSnapshot &snapshot);
   DashboardSnapshot effectiveSnapshot() const;
 
   WebServer server_;
@@ -113,4 +126,9 @@ private:
   unsigned long lastNetworkScanMs_ = 0;
   bool lastNetworkScanOk_ = false;
   String lastNetworkScanJson_;
+  TemperatureHistorySample temperatureHistory_[kTemperatureHistoryCapacity];
+  size_t temperatureHistoryStart_ = 0;
+  size_t temperatureHistoryCount_ = 0;
+  unsigned long lastTemperatureHistorySampleMs_ = 0;
+  bool hasTemperatureHistorySample_ = false;
 };

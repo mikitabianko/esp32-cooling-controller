@@ -113,6 +113,7 @@ Built-in routes:
 | `/` or `/dashboard.html` | Main dashboard |
 | `/dev` or `/dev.html` | Local/device development state view |
 | `/api/status` | Live status JSON |
+| `/api/history` | Compact in-memory temperature history JSON |
 | `/api/settings` | Read or save controller settings |
 | `/api/networks` | Scan nearby Wi-Fi networks and signal levels |
 | `/api/dev` | Read or save simulated dashboard state |

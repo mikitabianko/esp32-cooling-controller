@@ -11,6 +11,10 @@ void test_dashboard_assets_are_inlined()
   TEST_ASSERT_NOT_NULL(std::strstr(kIndexHtml, "--bg: #f5f7f8"));
   TEST_ASSERT_NOT_NULL(std::strstr(kIndexHtml, "window.CoolingWeb"));
   TEST_ASSERT_NOT_NULL(std::strstr(kIndexHtml, "settingsForm"));
+  TEST_ASSERT_NOT_NULL(std::strstr(kIndexHtml, "temperatureChart"));
+  TEST_ASSERT_NOT_NULL(std::strstr(kIndexHtml, "temperatureSeries"));
+  TEST_ASSERT_NOT_NULL(std::strstr(kIndexHtml, "secondaryTemperatureC"));
+  TEST_ASSERT_NOT_NULL(std::strstr(kIndexHtml, "/api/history"));
 }
 
 void test_dev_assets_are_inlined()

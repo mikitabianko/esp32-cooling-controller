@@ -5,6 +5,7 @@ from time import monotonic
 from urllib.parse import parse_qs
 import argparse
 import json
+import math
 import sys
 
 
@@ -149,6 +150,28 @@ class DashboardState:
             "count": len(DEMO_NETWORKS),
         }
 
+    def history(self):
+        uptime_ms = int((monotonic() - self.started_at) * 1000)
+        start_ms = max(0, uptime_ms - 30 * 60 * 1000)
+        step_ms = 10000
+        points = []
+        for sample_ms in range(start_ms, uptime_ms + 1, step_ms):
+            temperature_c = 5.4 + math.sin(sample_ms / 210000) * 0.8
+            points.append([sample_ms, round(temperature_c * 10), 0])
+        return {
+            "ok": True,
+            "historyMs": 2 * 60 * 60 * 1000,
+            "sampleIntervalMs": step_ms,
+            "series": [
+                {
+                    "id": "probe1",
+                    "label": "Probe 1",
+                    "unit": "C",
+                    "points": points,
+                }
+            ],
+        }
+
 
 def read_string(form, name, fallback):
     values = form.get(name)
@@ -192,6 +215,9 @@ class WebDevHandler(SimpleHTTPRequestHandler):
             return
         if self.path == "/api/settings":
             self.send_json({"ok": True, **self.state.public_settings()})
+            return
+        if self.path == "/api/history":
+            self.send_json(self.state.history())
             return
         if self.path == "/api/networks":
             self.send_json(self.state.networks())
@@ -240,7 +266,7 @@ def main():
     pages = ", ".join(route for route in page_routes())
     print(f"Serving dashboard at {url}")
     print(f"Pages: {pages}")
-    print("API: /api/status, /api/settings, /api/networks, /api/dev")
+    print("API: /api/status, /api/history, /api/settings, /api/networks, /api/dev")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

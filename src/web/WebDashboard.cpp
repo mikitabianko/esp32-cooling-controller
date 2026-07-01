@@ -117,6 +117,7 @@ IPAddress WebDashboard::begin()
 
   server_.on("/", [this]() { handlePage(); });
   server_.on("/api/status", [this]() { handleStatus(); });
+  server_.on("/api/history", HTTP_GET, [this]() { handleHistory(); });
   server_.on("/api/dev", HTTP_GET, [this]() { handleGetDevState(); });
   server_.on("/api/dev", HTTP_POST, [this]() { handleSaveDevState(); });
   server_.on("/api/settings", HTTP_GET, [this]() { handleGetSettings(); });
@@ -171,6 +172,7 @@ void WebDashboard::setSnapshot(const DashboardSnapshot &snapshot)
   snapshot_.settings = settings_;
   snapshot_.sensorDisconnected =
       snapshot_.hasTemperature && isSensorDisconnected(snapshot_.temperatureC);
+  recordTemperatureHistory(snapshot_);
 }
 
 void WebDashboard::setSettings(const AppSettings &settings)
@@ -220,6 +222,11 @@ void WebDashboard::handlePage()
 void WebDashboard::handleStatus()
 {
   server_.send(200, "application/json", statusJson());
+}
+
+void WebDashboard::handleHistory()
+{
+  server_.send(200, "application/json", historyJson());
 }
 
 void WebDashboard::handleGetDevState()
@@ -354,6 +361,36 @@ String WebDashboard::statusJson() const
   json += ",\"stationRssi\":";
   json += WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
   json += "}";
+  return json;
+}
+
+String WebDashboard::historyJson() const
+{
+  String json;
+  json.reserve(220 + temperatureHistoryCount_ * 22);
+  json += "{";
+  json += "\"ok\":true";
+  json += ",\"historyMs\":";
+  json += kTemperatureHistoryCapacity * kTemperatureHistoryMinIntervalMs;
+  json += ",\"sampleIntervalMs\":";
+  json += kTemperatureHistoryMinIntervalMs;
+  json += ",\"series\":[{\"id\":\"probe1\",\"label\":\"Probe 1\",\"unit\":\"C\",\"points\":[";
+  for (size_t i = 0; i < temperatureHistoryCount_; ++i) {
+    if (i > 0) {
+      json += ",";
+    }
+    const size_t index =
+        (temperatureHistoryStart_ + i) % kTemperatureHistoryCapacity;
+    const TemperatureHistorySample &sample = temperatureHistory_[index];
+    json += "[";
+    json += sample.uptimeMs;
+    json += ",";
+    json += sample.temperatureCx10;
+    json += ",";
+    json += sample.flags;
+    json += "]";
+  }
+  json += "]}]}";
   return json;
 }
 
@@ -1049,6 +1086,44 @@ bool WebDashboard::readUnsignedLongArg(const char *name,
   char *end = nullptr;
   value = strtoul(text.c_str(), &end, 10);
   return end != text.c_str() && *end == '\0';
+}
+
+void WebDashboard::recordTemperatureHistory(const DashboardSnapshot &snapshot)
+{
+  if (!snapshot.hasTemperature) {
+    return;
+  }
+  if (hasTemperatureHistorySample_ &&
+      snapshot.uptimeMs - lastTemperatureHistorySampleMs_ <
+          kTemperatureHistoryMinIntervalMs) {
+    return;
+  }
+
+  const float scaledTemperature = snapshot.temperatureC * 10.0F;
+  const int16_t temperatureCx10 = static_cast<int16_t>(
+      scaledTemperature >= 0.0F ? scaledTemperature + 0.5F
+                                : scaledTemperature - 0.5F);
+  TemperatureHistorySample sample;
+  sample.uptimeMs = snapshot.uptimeMs;
+  sample.temperatureCx10 = temperatureCx10;
+  sample.flags = snapshot.sensorDisconnected
+                     ? kTemperatureHistoryDisconnectedFlag
+                     : 0U;
+
+  size_t index = 0;
+  if (temperatureHistoryCount_ < kTemperatureHistoryCapacity) {
+    index = (temperatureHistoryStart_ + temperatureHistoryCount_) %
+            kTemperatureHistoryCapacity;
+    ++temperatureHistoryCount_;
+  } else {
+    index = temperatureHistoryStart_;
+    temperatureHistoryStart_ =
+        (temperatureHistoryStart_ + 1) % kTemperatureHistoryCapacity;
+  }
+
+  temperatureHistory_[index] = sample;
+  lastTemperatureHistorySampleMs_ = snapshot.uptimeMs;
+  hasTemperatureHistorySample_ = true;
 }
 
 DashboardSnapshot WebDashboard::effectiveSnapshot() const
