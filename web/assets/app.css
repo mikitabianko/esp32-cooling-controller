@@ -87,6 +87,19 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 .status-line { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--bg); }
 .status-line strong { display: block; color: var(--muted); font-size: 12px; font-weight: 700; }
 .status-line span { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 14px; }
+.scan-panel { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg); }
+.scan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.scan-head strong { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+.scan-state { margin-top: 8px; color: var(--muted); font-size: 13px; }
+.network-list { display: grid; gap: 7px; margin-top: 8px; }
+.network-item { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 10px; align-items: center; width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--card); color: var(--text); text-align: left; }
+.network-main { min-width: 0; display: grid; gap: 3px; }
+.network-main strong,
+.network-main span { overflow-wrap: anywhere; }
+.network-main strong { font-size: 14px; }
+.network-main span { color: var(--muted); font-size: 12px; }
+.signal-meter { height: 8px; overflow: hidden; border-radius: 999px; background: var(--border); }
+.signal-meter span { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
 .form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; grid-column: 1 / -1; margin-top: 4px; }
 #saveState { color: var(--muted); font-size: 13px; }
 

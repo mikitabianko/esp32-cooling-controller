@@ -1,6 +1,7 @@
 #include "domain/CoolingController.h"
 
 #include <Arduino.h>
+#include "debug/DebugLog.h"
 #include "domain/TemperatureLogic.h"
 
 namespace {
@@ -78,18 +79,18 @@ void CoolingController::updateFanRunOn(unsigned long nowMs)
 
 void CoolingController::logState() const
 {
-  Serial.print("Peltier: ");
-  Serial.print(state_.peltierRunning ? "ON" : "OFF");
-  Serial.print(" | fan: ");
-  Serial.print(state_.fanRunning ? "ON" : "OFF");
+  DEBUG_PRINT("Peltier: ");
+  DEBUG_PRINT(state_.peltierRunning ? "ON" : "OFF");
+  DEBUG_PRINT(" | fan: ");
+  DEBUG_PRINT(state_.fanRunning ? "ON" : "OFF");
   if (state_.fanRunOnActive) {
-    Serial.print(" | run-on ");
-    Serial.print(state_.fanRunOnRemainingMs / 1000);
-    Serial.print(" s");
+    DEBUG_PRINT(" | run-on ");
+    DEBUG_PRINT(state_.fanRunOnRemainingMs / 1000);
+    DEBUG_PRINT(" s");
   }
-  Serial.print(" | target ");
-  Serial.print(settings_.targetTemperatureC, 1);
-  Serial.print(" C | hysteresis ");
-  Serial.print(settings_.hysteresisC, 1);
-  Serial.println(" C");
+  DEBUG_PRINT(" | target ");
+  DEBUG_PRINT2(settings_.targetTemperatureC, 1);
+  DEBUG_PRINT(" C | hysteresis ");
+  DEBUG_PRINT2(settings_.hysteresisC, 1);
+  DEBUG_PRINTLN(" C");
 }

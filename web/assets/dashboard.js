@@ -61,6 +61,13 @@
     demo: true
   });
   const pageUrl = (ip) => ip ? 'http://' + ip + '/' : '--';
+  const signalQuality = (rssi) => {
+    if (rssi >= -55) return 'Excellent';
+    if (rssi >= -67) return 'Good';
+    if (rssi >= -75) return 'Fair';
+    return 'Weak';
+  };
+  const signalPercent = (rssi) => Math.max(0, Math.min(100, Math.round((Number(rssi) + 100) * 2)));
 
   document.addEventListener('DOMContentLoaded', () => {
     const demoBadge = document.getElementById('demoBadge');
@@ -69,8 +76,12 @@
     const settingsOverlay = document.getElementById('settingsOverlay');
     const settingsOpen = document.getElementById('settingsOpen');
     const settingsClose = document.getElementById('settingsClose');
+    const scanNetworks = document.getElementById('scanNetworks');
+    const networkList = document.getElementById('networkList');
+    const networkScanState = document.getElementById('networkScanState');
     const saveState = document.getElementById('saveState');
     let settingsDirty = false;
+    let networkScanStartedAt = 0;
     const applySettingsToForm = (data) => {
       if (settingsDirty) return;
       document.getElementById('targetInput').value = Number(data.targetC).toFixed(1);
@@ -85,9 +96,86 @@
     const renderNetworkStatus = (data) => {
       setText('apStatus', data.accessPointSsid || '--');
       setText('apPageStatus', pageUrl(data.accessPointIp));
-      setText('stationStatus', data.stationSsid ? (data.stationConnected ? data.stationSsid + ' / ' + data.stationRssi + ' dBm' : data.stationSsid + ' / ' + (data.stationStatus || 'disconnected')) : 'Disabled');
+      setText('stationStatus', data.stationSsid ? (data.stationConnected ? data.stationSsid + ' / ' + data.stationRssi + ' dBm' : data.stationSsid + ' / ' + (data.stationStatus || 'disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
       setText('stationPageStatus', data.stationConnected ? pageUrl(data.stationIp) : '--');
       setText('currentPageStatus', window.location.origin || '--');
+    };
+    const renderNetworks = (networks) => {
+      networkList.textContent = '';
+      if (!networks.length) {
+        networkScanState.textContent = 'No 2.4 GHz networks found';
+        return;
+      }
+      networkScanState.textContent = networks.length + ' found';
+      networks.forEach((network) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'network-item';
+        item.addEventListener('click', () => {
+          document.getElementById('stationSsidInput').value = network.ssid || '';
+          settingsDirty = true;
+          saveState.textContent = '';
+        });
+
+        const main = document.createElement('span');
+        main.className = 'network-main';
+        const ssid = document.createElement('strong');
+        ssid.textContent = network.ssid || '(hidden network)';
+        const detail = document.createElement('span');
+        detail.textContent = [
+          signalQuality(Number(network.rssi)),
+          Number(network.rssi) + ' dBm',
+          'ch ' + network.channel,
+          network.encrypted ? 'secured' : 'open'
+        ].join(' / ');
+        main.append(ssid, detail);
+
+        const meter = document.createElement('span');
+        meter.className = 'signal-meter';
+        const bar = document.createElement('span');
+        bar.style.width = signalPercent(network.rssi) + '%';
+        meter.append(bar);
+        item.append(main, meter);
+        networkList.append(item);
+      });
+    };
+    const loadNetworks = async (polling) => {
+      if (!polling) {
+        networkScanStartedAt = Date.now();
+      }
+      scanNetworks.disabled = true;
+      networkScanState.textContent = polling ? 'Still scanning...' : 'Scanning...';
+      try {
+        const res = await fetch('/api/networks', { cache: 'no-store' });
+        if (!res.ok) throw new Error('scan unavailable');
+        const data = await res.json();
+        if (data.scanStatus === 'scanning') {
+          if (Date.now() - networkScanStartedAt > 15000) {
+            networkList.textContent = '';
+            networkScanState.textContent = 'Scan timeout';
+            return;
+          }
+          window.setTimeout(() => loadNetworks(true), 600);
+          return;
+        }
+        if (!data.ok) {
+          networkList.textContent = '';
+          networkScanState.textContent = 'Scan ' + (data.scanStatus || 'failed');
+          return;
+        }
+        renderNetworks(Array.isArray(data.networks) ? data.networks : []);
+      } catch (error) {
+        renderNetworks([
+          { ssid: 'Kitchen WiFi', rssi: -48, channel: 6, encrypted: true },
+          { ssid: 'Workshop', rssi: -66, channel: 11, encrypted: true },
+          { ssid: 'Guest', rssi: -78, channel: 1, encrypted: false }
+        ]);
+        networkScanState.textContent = 'Demo scan';
+      } finally {
+        if (networkScanState.textContent !== 'Still scanning...' && networkScanState.textContent !== 'Scanning...') {
+          scanNetworks.disabled = false;
+        }
+      }
     };
     const openSettings = () => {
       settingsOverlay.classList.add('open');
@@ -102,6 +190,7 @@
     settingsOpen.setAttribute('aria-expanded', 'false');
     settingsOpen.addEventListener('click', openSettings);
     settingsClose.addEventListener('click', closeSettings);
+    scanNetworks.addEventListener('click', () => loadNetworks(false));
     settingsOverlay.addEventListener('click', (event) => {
       if (event.target === settingsOverlay) closeSettings();
     });
@@ -134,7 +223,7 @@
       setText('count', data.updateCount);
       setText('target', data.targetC.toFixed(1) + ' C / hys ' + data.hysteresisC.toFixed(1));
       setText('uptime', Math.floor(data.uptimeMs / 1000) + ' s');
-      setText('wifi', data.stationSsid ? (data.stationConnected ? data.stationIp : (data.stationStatus || 'Disconnected')) : 'Disabled');
+      setText('wifi', data.stationSsid ? (data.stationConnected ? data.stationIp : (data.stationStatus || 'Disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
       renderNetworkStatus(data);
       applySettingsToForm(data);
     }

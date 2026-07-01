@@ -40,6 +40,12 @@ DEFAULT_DEV_STATE = {
     "fanRunOnRemainingMs": 0,
 }
 
+DEMO_NETWORKS = [
+    {"ssid": "Kitchen WiFi", "rssi": -48, "channel": 6, "encrypted": True},
+    {"ssid": "Workshop", "rssi": -66, "channel": 11, "encrypted": True},
+    {"ssid": "Guest", "rssi": -78, "channel": 1, "encrypted": False},
+]
+
 
 class DashboardState:
     def __init__(self):
@@ -133,6 +139,16 @@ class DashboardState:
         }
         return dict(self.dev_state)
 
+    def networks(self):
+        return {
+            "ok": True,
+            "scanResult": len(DEMO_NETWORKS),
+            "scanStatus": "complete",
+            "scanMode": "active",
+            "networks": DEMO_NETWORKS,
+            "count": len(DEMO_NETWORKS),
+        }
+
 
 def read_string(form, name, fallback):
     values = form.get(name)
@@ -176,6 +192,9 @@ class WebDevHandler(SimpleHTTPRequestHandler):
             return
         if self.path == "/api/settings":
             self.send_json({"ok": True, **self.state.public_settings()})
+            return
+        if self.path == "/api/networks":
+            self.send_json(self.state.networks())
             return
         if self.path == "/api/dev":
             self.send_json(self.state.dev_state)
@@ -221,7 +240,7 @@ def main():
     pages = ", ".join(route for route in page_routes())
     print(f"Serving dashboard at {url}")
     print(f"Pages: {pages}")
-    print("API: /api/status, /api/settings, /api/dev")
+    print("API: /api/status, /api/settings, /api/networks, /api/dev")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

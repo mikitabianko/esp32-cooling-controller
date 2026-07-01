@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include "config/Config.h"
+#include "debug/DebugLog.h"
 
 void RelayModule::begin()
 {
@@ -12,7 +13,7 @@ void RelayModule::begin()
 
 void RelayModule::startSelfTest(unsigned long nowMs)
 {
-  Serial.println("Relay self-test: ON");
+  DEBUG_PRINTLN("Relay self-test: ON");
   setCooling(true);
   selfTestState_ = SelfTestState::CoolingOn;
   selfTestStateStartedMs_ = nowMs;
@@ -29,14 +30,14 @@ void RelayModule::updateSelfTest(unsigned long nowMs)
   }
 
   if (selfTestState_ == SelfTestState::CoolingOn) {
-    Serial.println("Relay self-test: OFF");
+    DEBUG_PRINTLN("Relay self-test: OFF");
     setCooling(false);
     selfTestState_ = SelfTestState::CoolingOff;
     selfTestStateStartedMs_ = nowMs;
     return;
   }
 
-  Serial.println("Relay self-test: DONE");
+  DEBUG_PRINTLN("Relay self-test: DONE");
   selfTestState_ = SelfTestState::Idle;
 }
 

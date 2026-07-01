@@ -4,6 +4,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include "config/Config.h"
+#include "debug/DebugLog.h"
 #include "domain/TemperatureLogic.h"
 
 namespace {
@@ -30,8 +31,56 @@ void OledView::begin()
   initialized_ = display_.begin(SSD1306_SWITCHCAPVCC,
                                 Config::Screen::Address);
   if (!initialized_) {
-    Serial.println(F("SSD1306 allocation failed"));
+    DEBUG_PRINTLN(F("SSD1306 allocation failed"));
   }
+}
+
+void OledView::showBootStatus(const char *message,
+                              unsigned long elapsedMs,
+                              unsigned long totalMs)
+{
+  if (!initialized_) {
+    return;
+  }
+
+  const int progressWidth =
+      totalMs > 0
+          ? static_cast<int>((elapsedMs * 86UL) / totalMs)
+          : 0;
+
+  display_.clearDisplay();
+  display_.drawRoundRect(2, 2, 24, 24, 4, SSD1306_WHITE);
+  display_.fillCircle(9, 11, 3, SSD1306_WHITE);
+  display_.drawLine(16, 8, 21, 8, SSD1306_WHITE);
+  display_.drawLine(16, 13, 21, 13, SSD1306_WHITE);
+  display_.drawLine(7, 21, 21, 21, SSD1306_WHITE);
+
+  display_.setTextSize(1);
+  display_.setTextColor(SSD1306_WHITE);
+  display_.setCursor(34, 4);
+  display_.println("Cooling");
+  display_.setCursor(34, 14);
+  display_.println("Controller");
+
+  display_.drawLine(0, 31, Config::Screen::Width, 31, SSD1306_WHITE);
+
+  display_.setCursor(0, 37);
+  display_.print(message);
+
+  display_.drawRect(0, 54, 88, 7, SSD1306_WHITE);
+  if (progressWidth > 0) {
+    display_.fillRect(1, 55, min(progressWidth, 86), 5, SSD1306_WHITE);
+  }
+
+  if (totalMs > 0) {
+    display_.setCursor(94, 53);
+    display_.print((elapsedMs + 999UL) / 1000UL);
+    display_.print("/");
+    display_.print((totalMs + 999UL) / 1000UL);
+    display_.print("s");
+  }
+
+  display_.display();
 }
 
 void OledView::showStartup()

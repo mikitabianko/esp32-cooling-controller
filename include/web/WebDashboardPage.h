@@ -100,6 +100,19 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 .status-line { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--bg); }
 .status-line strong { display: block; color: var(--muted); font-size: 12px; font-weight: 700; }
 .status-line span { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 14px; }
+.scan-panel { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg); }
+.scan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.scan-head strong { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+.scan-state { margin-top: 8px; color: var(--muted); font-size: 13px; }
+.network-list { display: grid; gap: 7px; margin-top: 8px; }
+.network-item { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 10px; align-items: center; width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--card); color: var(--text); text-align: left; }
+.network-main { min-width: 0; display: grid; gap: 3px; }
+.network-main strong,
+.network-main span { overflow-wrap: anywhere; }
+.network-main strong { font-size: 14px; }
+.network-main span { color: var(--muted); font-size: 12px; }
+.signal-meter { height: 8px; overflow: hidden; border-radius: 999px; background: var(--border); }
+.signal-meter span { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
 .form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; grid-column: 1 / -1; margin-top: 4px; }
 #saveState { color: var(--muted); font-size: 13px; }
 
@@ -159,6 +172,14 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
             <div class="status-line"><strong>Connected network</strong><span id="stationStatus">--</span></div>
             <div class="status-line"><strong>Connected page</strong><span id="stationPageStatus">--</span></div>
             <div class="status-line"><strong>Current page</strong><span id="currentPageStatus">--</span></div>
+          </div>
+          <div class="scan-panel">
+            <div class="scan-head">
+              <strong>Nearby networks</strong>
+              <button id="scanNetworks" type="button">Scan</button>
+            </div>
+            <div id="networkScanState" class="scan-state">Not scanned yet</div>
+            <div id="networkList" class="network-list" aria-live="polite"></div>
           </div>
           <label class="label">Network SSID<input id="stationSsidInput" name="stationSsid" type="text" maxlength="32" autocomplete="off"></label>
           <label class="label">Network password<input id="stationPasswordInput" name="stationPassword" type="password" maxlength="64" autocomplete="new-password" placeholder="Leave blank to keep saved"></label>
@@ -291,6 +312,13 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     demo: true
   });
   const pageUrl = (ip) => ip ? 'http://' + ip + '/' : '--';
+  const signalQuality = (rssi) => {
+    if (rssi >= -55) return 'Excellent';
+    if (rssi >= -67) return 'Good';
+    if (rssi >= -75) return 'Fair';
+    return 'Weak';
+  };
+  const signalPercent = (rssi) => Math.max(0, Math.min(100, Math.round((Number(rssi) + 100) * 2)));
 
   document.addEventListener('DOMContentLoaded', () => {
     const demoBadge = document.getElementById('demoBadge');
@@ -299,8 +327,12 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     const settingsOverlay = document.getElementById('settingsOverlay');
     const settingsOpen = document.getElementById('settingsOpen');
     const settingsClose = document.getElementById('settingsClose');
+    const scanNetworks = document.getElementById('scanNetworks');
+    const networkList = document.getElementById('networkList');
+    const networkScanState = document.getElementById('networkScanState');
     const saveState = document.getElementById('saveState');
     let settingsDirty = false;
+    let networkScanStartedAt = 0;
     const applySettingsToForm = (data) => {
       if (settingsDirty) return;
       document.getElementById('targetInput').value = Number(data.targetC).toFixed(1);
@@ -315,9 +347,86 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     const renderNetworkStatus = (data) => {
       setText('apStatus', data.accessPointSsid || '--');
       setText('apPageStatus', pageUrl(data.accessPointIp));
-      setText('stationStatus', data.stationSsid ? (data.stationConnected ? data.stationSsid + ' / ' + data.stationRssi + ' dBm' : data.stationSsid + ' / ' + (data.stationStatus || 'disconnected')) : 'Disabled');
+      setText('stationStatus', data.stationSsid ? (data.stationConnected ? data.stationSsid + ' / ' + data.stationRssi + ' dBm' : data.stationSsid + ' / ' + (data.stationStatus || 'disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
       setText('stationPageStatus', data.stationConnected ? pageUrl(data.stationIp) : '--');
       setText('currentPageStatus', window.location.origin || '--');
+    };
+    const renderNetworks = (networks) => {
+      networkList.textContent = '';
+      if (!networks.length) {
+        networkScanState.textContent = 'No 2.4 GHz networks found';
+        return;
+      }
+      networkScanState.textContent = networks.length + ' found';
+      networks.forEach((network) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'network-item';
+        item.addEventListener('click', () => {
+          document.getElementById('stationSsidInput').value = network.ssid || '';
+          settingsDirty = true;
+          saveState.textContent = '';
+        });
+
+        const main = document.createElement('span');
+        main.className = 'network-main';
+        const ssid = document.createElement('strong');
+        ssid.textContent = network.ssid || '(hidden network)';
+        const detail = document.createElement('span');
+        detail.textContent = [
+          signalQuality(Number(network.rssi)),
+          Number(network.rssi) + ' dBm',
+          'ch ' + network.channel,
+          network.encrypted ? 'secured' : 'open'
+        ].join(' / ');
+        main.append(ssid, detail);
+
+        const meter = document.createElement('span');
+        meter.className = 'signal-meter';
+        const bar = document.createElement('span');
+        bar.style.width = signalPercent(network.rssi) + '%';
+        meter.append(bar);
+        item.append(main, meter);
+        networkList.append(item);
+      });
+    };
+    const loadNetworks = async (polling) => {
+      if (!polling) {
+        networkScanStartedAt = Date.now();
+      }
+      scanNetworks.disabled = true;
+      networkScanState.textContent = polling ? 'Still scanning...' : 'Scanning...';
+      try {
+        const res = await fetch('/api/networks', { cache: 'no-store' });
+        if (!res.ok) throw new Error('scan unavailable');
+        const data = await res.json();
+        if (data.scanStatus === 'scanning') {
+          if (Date.now() - networkScanStartedAt > 15000) {
+            networkList.textContent = '';
+            networkScanState.textContent = 'Scan timeout';
+            return;
+          }
+          window.setTimeout(() => loadNetworks(true), 600);
+          return;
+        }
+        if (!data.ok) {
+          networkList.textContent = '';
+          networkScanState.textContent = 'Scan ' + (data.scanStatus || 'failed');
+          return;
+        }
+        renderNetworks(Array.isArray(data.networks) ? data.networks : []);
+      } catch (error) {
+        renderNetworks([
+          { ssid: 'Kitchen WiFi', rssi: -48, channel: 6, encrypted: true },
+          { ssid: 'Workshop', rssi: -66, channel: 11, encrypted: true },
+          { ssid: 'Guest', rssi: -78, channel: 1, encrypted: false }
+        ]);
+        networkScanState.textContent = 'Demo scan';
+      } finally {
+        if (networkScanState.textContent !== 'Still scanning...' && networkScanState.textContent !== 'Scanning...') {
+          scanNetworks.disabled = false;
+        }
+      }
     };
     const openSettings = () => {
       settingsOverlay.classList.add('open');
@@ -332,6 +441,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     settingsOpen.setAttribute('aria-expanded', 'false');
     settingsOpen.addEventListener('click', openSettings);
     settingsClose.addEventListener('click', closeSettings);
+    scanNetworks.addEventListener('click', () => loadNetworks(false));
     settingsOverlay.addEventListener('click', (event) => {
       if (event.target === settingsOverlay) closeSettings();
     });
@@ -364,7 +474,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       setText('count', data.updateCount);
       setText('target', data.targetC.toFixed(1) + ' C / hys ' + data.hysteresisC.toFixed(1));
       setText('uptime', Math.floor(data.uptimeMs / 1000) + ' s');
-      setText('wifi', data.stationSsid ? (data.stationConnected ? data.stationIp : (data.stationStatus || 'Disconnected')) : 'Disabled');
+      setText('wifi', data.stationSsid ? (data.stationConnected ? data.stationIp : (data.stationStatus || 'Disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
       renderNetworkStatus(data);
       applySettingsToForm(data);
     }
@@ -501,6 +611,19 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 .status-line { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--bg); }
 .status-line strong { display: block; color: var(--muted); font-size: 12px; font-weight: 700; }
 .status-line span { display: block; margin-top: 4px; overflow-wrap: anywhere; font-size: 14px; }
+.scan-panel { grid-column: 1 / -1; border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg); }
+.scan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.scan-head strong { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+.scan-state { margin-top: 8px; color: var(--muted); font-size: 13px; }
+.network-list { display: grid; gap: 7px; margin-top: 8px; }
+.network-item { display: grid; grid-template-columns: minmax(0, 1fr) 72px; gap: 10px; align-items: center; width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--card); color: var(--text); text-align: left; }
+.network-main { min-width: 0; display: grid; gap: 3px; }
+.network-main strong,
+.network-main span { overflow-wrap: anywhere; }
+.network-main strong { font-size: 14px; }
+.network-main span { color: var(--muted); font-size: 12px; }
+.signal-meter { height: 8px; overflow: hidden; border-radius: 999px; background: var(--border); }
+.signal-meter span { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
 .form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; grid-column: 1 / -1; margin-top: 4px; }
 #saveState { color: var(--muted); font-size: 13px; }
 

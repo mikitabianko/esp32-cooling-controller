@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include "config/Config.h"
+#include "debug/DebugLog.h"
 #include "domain/TemperatureLogic.h"
 
 TemperatureProbe::TemperatureProbe()
@@ -38,8 +39,8 @@ bool TemperatureProbe::update(unsigned long nowMs, float &temperatureC)
 
   temperatureC = sensors_.getTempCByIndex(0);
   conversionPending_ = false;
-  Serial.print("Temperature for device 1: ");
-  Serial.println(temperatureC);
+  DEBUG_PRINT("Temperature for device 1: ");
+  DEBUG_PRINTLN(temperatureC);
   return true;
 }
 
@@ -49,8 +50,8 @@ void TemperatureProbe::recordUpdate()
   sensors_.setUserDataByIndex(0, updateCount_);
   (void)sensors_.getUserDataByIndex(0);
 
-  Serial.print("Counter: ");
-  Serial.println(updateCount_);
+  DEBUG_PRINT("Counter: ");
+  DEBUG_PRINTLN(updateCount_);
 }
 
 int TemperatureProbe::updateCount() const
@@ -60,7 +61,7 @@ int TemperatureProbe::updateCount() const
 
 void TemperatureProbe::requestTemperature(unsigned long nowMs)
 {
-  Serial.println("Requesting temperatures...");
+  DEBUG_PRINTLN("Requesting temperatures...");
   sensors_.requestTemperatures();
   requestedAtMs_ = nowMs;
   requestSent_ = true;

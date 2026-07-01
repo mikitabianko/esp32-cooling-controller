@@ -34,6 +34,10 @@ constexpr size_t MaxStationPasswordLength = 64;
 constexpr uint16_t WebServerPort = 80;
 } // namespace Network
 
+namespace Debug {
+constexpr unsigned long SerialBaud = 115200;
+} // namespace Debug
+
 namespace Control {
 constexpr unsigned long DefaultMeasurementIntervalMs = 500;
 constexpr float DefaultTargetTemperatureC = 5.0F;

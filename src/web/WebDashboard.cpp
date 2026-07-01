@@ -3,10 +3,15 @@
 #include <WiFi.h>
 #include <cstdlib>
 #include "config/Config.h"
+#include "debug/DebugLog.h"
 #include "domain/TemperatureLogic.h"
 #include "web/WebDashboardPage.h"
 
 namespace {
+
+constexpr unsigned long kNetworkScanCacheMs = 30000;
+constexpr unsigned long kNetworkScanFailureCacheMs = 5000;
+constexpr unsigned long kStationConnectPrepareMs = 250;
 
 bool isSensorDisconnected(float temperatureC)
 {
@@ -31,7 +36,6 @@ IPAddress WebDashboard::begin()
               Config::Network::AccessPointPassword);
   ipAddress_ = WiFi.softAPIP();
   networkStarted_ = true;
-  connectStation();
 
   server_.on("/", [this]() { handlePage(); });
   server_.on("/api/status", [this]() { handleStatus(); });
@@ -39,25 +43,30 @@ IPAddress WebDashboard::begin()
   server_.on("/api/dev", HTTP_POST, [this]() { handleSaveDevState(); });
   server_.on("/api/settings", HTTP_GET, [this]() { handleGetSettings(); });
   server_.on("/api/settings", HTTP_POST, [this]() { handleSaveSettings(); });
+  server_.on("/api/networks", HTTP_GET, [this]() { handleNetworks(); });
   server_.onNotFound([this]() { handleNotFound(); });
   server_.begin();
+  connectStation();
 
-  Serial.print("WiFi AP: ");
-  Serial.println(Config::Network::AccessPointSsid);
-  Serial.print("AP web server: http://");
-  Serial.println(ipAddress_);
+  DEBUG_PRINT("WiFi AP: ");
+  DEBUG_PRINTLN(Config::Network::AccessPointSsid);
+  DEBUG_PRINT("AP web server: http://");
+  DEBUG_PRINTLN(ipAddress_);
   if (settings_.stationSsid.length() > 0) {
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.print("STA connected to: ");
-      Serial.println(settings_.stationSsid);
-      Serial.print("STA web server: http://");
-      Serial.println(WiFi.localIP());
+      DEBUG_PRINT("STA connected to: ");
+      DEBUG_PRINTLN(settings_.stationSsid);
+      DEBUG_PRINT("STA web server: http://");
+      DEBUG_PRINTLN(WiFi.localIP());
+    } else if (stationConnecting_) {
+      DEBUG_PRINT("STA connection started: ");
+      DEBUG_PRINTLN(settings_.stationSsid);
     } else {
-      Serial.print("STA connection failed: ");
-      Serial.println(settings_.stationSsid);
+      DEBUG_PRINT("STA connection failed: ");
+      DEBUG_PRINTLN(settings_.stationSsid);
     }
   } else {
-    Serial.println("STA disabled: StationSsid is empty");
+    DEBUG_PRINTLN("STA disabled: StationSsid is empty");
   }
 
   return ipAddress_;
@@ -65,14 +74,23 @@ IPAddress WebDashboard::begin()
 
 void WebDashboard::update()
 {
+  updateStationConnection();
   maintainStationConnection();
+  updateNetworkScan();
   server_.handleClient();
+}
+
+void WebDashboard::setStartupProgressHandler(StartupProgressHandler handler,
+                                             void *context)
+{
+  startupProgressHandler_ = handler;
+  startupProgressContext_ = context;
 }
 
 void WebDashboard::setSnapshot(const DashboardSnapshot &snapshot)
 {
   snapshot_ = snapshot;
-  settings_ = snapshot_.settings;
+  snapshot_.settings = settings_;
   snapshot_.sensorDisconnected =
       snapshot_.hasTemperature && isSensorDisconnected(snapshot_.temperatureC);
 }
@@ -82,6 +100,7 @@ void WebDashboard::setSettings(const AppSettings &settings)
   const String previousSsid = settings_.stationSsid;
   const String previousPassword = settings_.stationPassword;
   settings_ = sanitizedSettings(settings);
+  persistedSettings_ = settings_;
   snapshot_.settings = settings_;
   if (networkStarted_ &&
       (settings_.stationSsid != previousSsid ||
@@ -157,15 +176,34 @@ void WebDashboard::handleSaveSettings()
 
   const String previousSsid = settings_.stationSsid;
   const String previousPassword = settings_.stationPassword;
-  pendingSettings_ = sanitizedSettings(settings);
-  settings_ = pendingSettings_;
+  settings_ = sanitizedSettings(settings);
   snapshot_.settings = settings_;
-  if (settings_.stationSsid != previousSsid ||
-      settings_.stationPassword != previousPassword) {
+  const bool stationChanged = settings_.stationSsid != previousSsid ||
+                              settings_.stationPassword != previousPassword;
+  const bool stationNeedsTrial = stationChanged &&
+                                 settings_.stationSsid.length() > 0;
+
+  if (stationNeedsTrial) {
+    AppSettings settingsToSave = settings_;
+    settingsToSave.stationSsid = persistedSettings_.stationSsid;
+    settingsToSave.stationPassword = persistedSettings_.stationPassword;
+    stationCredentialSavePending_ = true;
+    queueSettingsSave(settingsToSave);
     connectStation();
+  } else {
+    stationCredentialSavePending_ = false;
+    persistedSettings_ = settings_;
+    queueSettingsSave(settings_);
+    if (stationChanged) {
+      connectStation();
+    }
   }
-  hasPendingSettings_ = true;
   server_.send(200, "application/json", settingsJson());
+}
+
+void WebDashboard::handleNetworks()
+{
+  server_.send(200, "application/json", networksJson());
 }
 
 void WebDashboard::handleNotFound()
@@ -222,6 +260,8 @@ String WebDashboard::statusJson() const
   json += boolText(WiFi.status() == WL_CONNECTED);
   json += ",\"stationStatus\":";
   json += jsonString(stationStatusText());
+  json += ",\"stationLastFailure\":";
+  json += jsonString(lastStationFailure_);
   json += ",\"stationIp\":";
   json += jsonString(WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString()
                                                    : String(""));
@@ -256,6 +296,8 @@ String WebDashboard::settingsJson() const
   json += boolText(WiFi.status() == WL_CONNECTED);
   json += ",\"stationStatus\":";
   json += jsonString(stationStatusText());
+  json += ",\"stationLastFailure\":";
+  json += jsonString(lastStationFailure_);
   json += ",\"stationIp\":";
   json += jsonString(WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString()
                                                    : String(""));
@@ -263,6 +305,31 @@ String WebDashboard::settingsJson() const
   json += WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
   json += "}";
   return json;
+}
+
+String WebDashboard::networksJson()
+{
+  updateNetworkScan();
+  if (networkScanRunning_) {
+    return networkScanJson("scanning", false, WIFI_SCAN_RUNNING);
+  }
+  if (lastNetworkScanOk_ &&
+      lastNetworkScanJson_.length() > 0 &&
+      millis() - lastNetworkScanMs_ < kNetworkScanCacheMs) {
+    return lastNetworkScanJson_;
+  }
+  if (!lastNetworkScanOk_ &&
+      lastNetworkScanJson_.length() > 0 &&
+      millis() - lastNetworkScanMs_ < kNetworkScanFailureCacheMs) {
+    return lastNetworkScanJson_;
+  }
+  if (startNetworkScan()) {
+    return networkScanJson("scanning", false, WIFI_SCAN_RUNNING);
+  }
+  if (lastNetworkScanJson_.length() > 0) {
+    return lastNetworkScanJson_;
+  }
+  return networkScanJson("failed", false, WIFI_SCAN_FAILED);
 }
 
 String WebDashboard::devJson() const
@@ -313,6 +380,20 @@ String WebDashboard::boolText(bool value) const
   return value ? "true" : "false";
 }
 
+String WebDashboard::wifiScanStatusText(int scanResult) const
+{
+  if (scanResult >= 0) {
+    return "complete";
+  }
+  if (scanResult == WIFI_SCAN_RUNNING) {
+    return "running";
+  }
+  if (scanResult == WIFI_SCAN_FAILED) {
+    return "failed";
+  }
+  return "unknown";
+}
+
 String WebDashboard::stationStatusText() const
 {
   if (settings_.stationSsid.length() == 0) {
@@ -329,11 +410,86 @@ String WebDashboard::stationStatusText() const
   case WL_CONNECTION_LOST:
     return "connection lost";
   case WL_DISCONNECTED:
-    return "disconnected";
+    return stationConnecting_ ? "connecting" : "disconnected";
   case WL_IDLE_STATUS:
     return "connecting";
   default:
     return "unknown";
+  }
+}
+
+String WebDashboard::stationFailureText(int status,
+                                        unsigned long elapsedMs) const
+{
+  switch (status) {
+  case WL_NO_SSID_AVAIL:
+    return "SSID not found";
+  case WL_CONNECT_FAILED:
+    return "authentication or association failed";
+  case WL_CONNECTION_LOST:
+    return "connection lost";
+  case WL_DISCONNECTED:
+  case WL_IDLE_STATUS:
+    if (elapsedMs >= Config::Network::StationConnectTimeoutMs) {
+      return "connection timeout";
+    }
+    return "disconnected";
+  default:
+    return "unknown WiFi status " + String(status);
+  }
+}
+
+void WebDashboard::notifyStartupProgress(const char *message,
+                                         unsigned long elapsedMs,
+                                         unsigned long totalMs)
+{
+  if (startupProgressHandler_ == nullptr) {
+    return;
+  }
+
+  startupProgressHandler_(startupProgressContext_,
+                          message,
+                          elapsedMs,
+                          totalMs);
+}
+
+void WebDashboard::queueSettingsSave(const AppSettings &settings)
+{
+  pendingSettings_ = sanitizedSettings(settings);
+  hasPendingSettings_ = true;
+}
+
+void WebDashboard::saveConfirmedStationCredentials()
+{
+  if (!stationCredentialSavePending_) {
+    return;
+  }
+
+  stationCredentialSavePending_ = false;
+  persistedSettings_ = settings_;
+  queueSettingsSave(settings_);
+  DEBUG_PRINT("STA credentials confirmed and saved for: ");
+  DEBUG_PRINTLN(settings_.stationSsid);
+}
+
+void WebDashboard::discardUnconfirmedStationCredentials(int status,
+                                                        unsigned long elapsedMs)
+{
+  if (!stationCredentialSavePending_) {
+    return;
+  }
+
+  DEBUG_PRINT("STA credentials not saved for: ");
+  DEBUG_PRINT(settings_.stationSsid);
+  DEBUG_PRINT(" (");
+  DEBUG_PRINT(stationFailureText(status, elapsedMs));
+  DEBUG_PRINTLN(")");
+  stationCredentialSavePending_ = false;
+  settings_.stationSsid = persistedSettings_.stationSsid;
+  settings_.stationPassword = persistedSettings_.stationPassword;
+  snapshot_.settings = settings_;
+  if (settings_.stationSsid.length() > 0) {
+    connectStation();
   }
 }
 
@@ -343,31 +499,115 @@ void WebDashboard::connectStation()
     return;
   }
 
+  stationConnecting_ = false;
+  stationConnectPending_ = false;
+  if (networkScanRunning_) {
+    stationReconnectAfterScan_ = settings_.stationSsid.length() > 0;
+    WiFi.setAutoReconnect(false);
+    return;
+  }
+
+  stationReconnectAfterScan_ = false;
+  prepareStationConnect();
+}
+
+void WebDashboard::prepareStationConnect()
+{
   WiFi.disconnect(false, false);
   if (settings_.stationSsid.length() == 0) {
+    notifyStartupProgress("WiFi STA disabled", 0, 0);
+    return;
+  }
+
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.setAutoReconnect(false);
+  stationConnectPending_ = true;
+  stationConnectPrepareUntilMs_ = millis() + kStationConnectPrepareMs;
+}
+
+void WebDashboard::startStationConnect()
+{
+  if (!stationConnectPending_) {
     return;
   }
 
   lastStationConnectAttemptMs_ = millis();
-  Serial.print("STA connecting to: ");
-  Serial.println(settings_.stationSsid);
-  WiFi.begin(settings_.stationSsid.c_str(), settings_.stationPassword.c_str());
-  const unsigned long startedAt = millis();
-  while (WiFi.status() != WL_CONNECTED &&
-         millis() - startedAt < Config::Network::StationConnectTimeoutMs) {
-    delay(100);
+  stationConnectStartedMs_ = lastStationConnectAttemptMs_;
+  lastStationProgressMs_ = stationConnectStartedMs_;
+  stationConnectPending_ = false;
+  stationConnecting_ = true;
+  DEBUG_PRINT("STA connecting to: ");
+  DEBUG_PRINTLN(settings_.stationSsid);
+  lastStationFailure_ = "";
+  notifyStartupProgress("Connecting WiFi", 0,
+                        Config::Network::StationConnectTimeoutMs);
+  if (settings_.stationPassword.length() == 0) {
+    WiFi.begin(settings_.stationSsid.c_str());
+  } else {
+    WiFi.begin(settings_.stationSsid.c_str(), settings_.stationPassword.c_str());
   }
-  Serial.print("STA status: ");
-  Serial.println(stationStatusText());
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("STA IP: ");
-    Serial.println(WiFi.localIP());
+}
+
+void WebDashboard::updateStationConnection()
+{
+  if (stationConnectPending_) {
+    if (static_cast<long>(millis() - stationConnectPrepareUntilMs_) < 0) {
+      return;
+    }
+    startStationConnect();
+  }
+
+  if (!stationConnecting_) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  const unsigned long elapsedMs = now - stationConnectStartedMs_;
+  const wl_status_t status = WiFi.status();
+  if (status != WL_CONNECTED &&
+      elapsedMs < Config::Network::StationConnectTimeoutMs) {
+    if (now - lastStationProgressMs_ >= 500) {
+      lastStationProgressMs_ = now;
+      notifyStartupProgress("Connecting WiFi",
+                            elapsedMs,
+                            Config::Network::StationConnectTimeoutMs);
+    }
+    return;
+  }
+
+  stationConnecting_ = false;
+  DEBUG_PRINT("STA status: ");
+  DEBUG_PRINTLN(stationStatusText());
+  if (status == WL_CONNECTED) {
+    notifyStartupProgress("WiFi connected",
+                          elapsedMs,
+                          Config::Network::StationConnectTimeoutMs);
+    DEBUG_PRINT("STA IP: ");
+    DEBUG_PRINTLN(WiFi.localIP());
+    lastStationFailure_ = "";
+    saveConfirmedStationCredentials();
+  } else {
+    lastStationFailure_ = stationFailureText(status, elapsedMs);
+    notifyStartupProgress("WiFi not connected",
+                          elapsedMs,
+                          Config::Network::StationConnectTimeoutMs);
+    DEBUG_PRINT("STA connection failed for: ");
+    DEBUG_PRINT(settings_.stationSsid);
+    DEBUG_PRINT(" (");
+    DEBUG_PRINT(stationFailureText(status, elapsedMs));
+    DEBUG_PRINT(", elapsed ");
+    DEBUG_PRINT(elapsedMs);
+    DEBUG_PRINTLN(" ms)");
+    discardUnconfirmedStationCredentials(status, elapsedMs);
   }
 }
 
 void WebDashboard::maintainStationConnection()
 {
-  if (!networkStarted_ || settings_.stationSsid.length() == 0 ||
+  if (!networkStarted_ || networkScanRunning_ ||
+      settings_.stationSsid.length() == 0 ||
+      stationConnectPending_ ||
+      stationConnecting_ ||
       WiFi.status() == WL_CONNECTED) {
     return;
   }
@@ -379,6 +619,137 @@ void WebDashboard::maintainStationConnection()
   }
 
   connectStation();
+}
+
+bool WebDashboard::startNetworkScan()
+{
+  stationReconnectAfterScan_ =
+      settings_.stationSsid.length() > 0 && WiFi.status() != WL_CONNECTED;
+  if (stationReconnectAfterScan_) {
+    stationConnecting_ = false;
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false, false);
+    delay(50);
+  }
+
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.scanDelete();
+  const int result = WiFi.scanNetworks(true, true, false, 300);
+  if (result == WIFI_SCAN_RUNNING) {
+    networkScanRunning_ = true;
+    networkScanStartedMs_ = millis();
+    return true;
+  }
+  if (result >= 0) {
+    lastNetworkScanJson_ = completedNetworkScanJson(result);
+    lastNetworkScanMs_ = millis();
+    lastNetworkScanOk_ = true;
+    WiFi.scanDelete();
+    resumeStationAfterScan();
+    return false;
+  }
+
+  networkScanRunning_ = false;
+  lastNetworkScanJson_ = networkScanJson(wifiScanStatusText(result).c_str(),
+                                         false,
+                                         result);
+  lastNetworkScanMs_ = millis();
+  lastNetworkScanOk_ = false;
+  WiFi.scanDelete();
+  resumeStationAfterScan();
+  return false;
+}
+
+void WebDashboard::updateNetworkScan()
+{
+  if (!networkScanRunning_) {
+    return;
+  }
+
+  const int result = WiFi.scanComplete();
+  if (result == WIFI_SCAN_RUNNING) {
+    if (millis() - networkScanStartedMs_ > 12000) {
+      networkScanRunning_ = false;
+      lastNetworkScanJson_ = networkScanJson("timeout", false, WIFI_SCAN_FAILED);
+      lastNetworkScanMs_ = millis();
+      lastNetworkScanOk_ = false;
+      WiFi.scanDelete();
+      resumeStationAfterScan();
+    }
+    return;
+  }
+
+  networkScanRunning_ = false;
+  if (result >= 0) {
+    lastNetworkScanJson_ = completedNetworkScanJson(result);
+    lastNetworkScanOk_ = true;
+  } else {
+    lastNetworkScanJson_ = networkScanJson(wifiScanStatusText(result).c_str(),
+                                           false,
+                                           result);
+    lastNetworkScanOk_ = false;
+  }
+  lastNetworkScanMs_ = millis();
+  WiFi.scanDelete();
+  resumeStationAfterScan();
+}
+
+void WebDashboard::resumeStationAfterScan()
+{
+  WiFi.setAutoReconnect(true);
+  if (!stationReconnectAfterScan_) {
+    return;
+  }
+
+  stationReconnectAfterScan_ = false;
+  connectStation();
+}
+
+String WebDashboard::networkScanJson(const char *status,
+                                     bool ok,
+                                     int result) const
+{
+  String json;
+  json.reserve(120);
+  json += "{\"ok\":";
+  json += boolText(ok);
+  json += ",\"scanResult\":";
+  json += result;
+  json += ",\"scanStatus\":";
+  json += jsonString(status);
+  json += ",\"networks\":[],\"count\":0}";
+  return json;
+}
+
+String WebDashboard::completedNetworkScanJson(int networkCount) const
+{
+  String json;
+  json.reserve(180 + (networkCount > 0 ? networkCount * 96 : 0));
+  json += "{\"ok\":true";
+  json += ",\"scanResult\":";
+  json += networkCount;
+  json += ",\"scanStatus\":\"complete\"";
+  json += ",\"networks\":[";
+  if (networkCount > 0) {
+    for (int i = 0; i < networkCount; ++i) {
+      if (i > 0) {
+        json += ",";
+      }
+      json += "{\"ssid\":";
+      json += jsonString(WiFi.SSID(i));
+      json += ",\"rssi\":";
+      json += WiFi.RSSI(i);
+      json += ",\"channel\":";
+      json += WiFi.channel(i);
+      json += ",\"encrypted\":";
+      json += boolText(WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+      json += "}";
+    }
+  }
+  json += "],\"count\":";
+  json += networkCount > 0 ? networkCount : 0;
+  json += "}";
+  return json;
 }
 
 bool WebDashboard::readSettingsArgs(AppSettings &settings)
@@ -413,7 +784,9 @@ bool WebDashboard::readSettingsArgs(AppSettings &settings)
   settings.fanRunOnMs = fanRunOnMs;
   settings.stationSsid = stationSsid;
   settings.stationPassword = settings_.stationPassword;
-  if (clearStationPassword || stationSsid.length() == 0) {
+  const bool stationSsidChanged = stationSsid != settings_.stationSsid;
+  if (clearStationPassword || stationSsid.length() == 0 ||
+      (stationSsidChanged && stationPassword.length() == 0)) {
     settings.stationPassword = "";
   } else if (stationPassword.length() > 0) {
     settings.stationPassword = stationPassword;

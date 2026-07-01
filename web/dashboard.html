@@ -53,6 +53,14 @@
             <div class="status-line"><strong>Connected page</strong><span id="stationPageStatus">--</span></div>
             <div class="status-line"><strong>Current page</strong><span id="currentPageStatus">--</span></div>
           </div>
+          <div class="scan-panel">
+            <div class="scan-head">
+              <strong>Nearby networks</strong>
+              <button id="scanNetworks" type="button">Scan</button>
+            </div>
+            <div id="networkScanState" class="scan-state">Not scanned yet</div>
+            <div id="networkList" class="network-list" aria-live="polite"></div>
+          </div>
           <label class="label">Network SSID<input id="stationSsidInput" name="stationSsid" type="text" maxlength="32" autocomplete="off"></label>
           <label class="label">Network password<input id="stationPasswordInput" name="stationPassword" type="password" maxlength="64" autocomplete="new-password" placeholder="Leave blank to keep saved"></label>
           <label class="check"><input id="clearStationPasswordInput" name="clearStationPassword" type="checkbox" value="1"> Clear saved password</label>

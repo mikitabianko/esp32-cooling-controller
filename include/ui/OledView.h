@@ -10,6 +10,9 @@ public:
   OledView();
 
   void begin();
+  void showBootStatus(const char *message,
+                      unsigned long elapsedMs = 0,
+                      unsigned long totalMs = 0);
   void showStartup();
   void setIpAddress(IPAddress ipAddress);
   void showTemperature(float temperatureC,

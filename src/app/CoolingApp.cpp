@@ -1,13 +1,22 @@
 #include "app/CoolingApp.h"
 
 #include "config/Config.h"
+#include "debug/DebugLog.h"
 
 namespace {
 
 void beginSerial()
 {
-  Serial.begin(9600);
-  Serial.println("Cooling controller started");
+  DEBUG_SERIAL_BEGIN(Config::Debug::SerialBaud);
+  DEBUG_PRINTLN("Cooling controller started");
+}
+
+void showStartupProgress(void *context,
+                         const char *message,
+                         unsigned long elapsedMs,
+                         unsigned long totalMs)
+{
+  static_cast<OledView *>(context)->showBootStatus(message, elapsedMs, totalMs);
 }
 
 } // namespace
@@ -15,12 +24,17 @@ void beginSerial()
 void CoolingApp::begin()
 {
   beginSerial();
+  view_.begin();
+  view_.showBootStatus("Starting...");
   settingsStore_.begin();
+  view_.showBootStatus("Loading settings");
   applySettings(settingsStore_.load());
   relays_.begin();
-  view_.begin();
+  view_.showBootStatus("Starting network");
   dashboard_.setSettings(settings_);
+  dashboard_.setStartupProgressHandler(showStartupProgress, &view_);
   const IPAddress ip = dashboard_.begin();
+  dashboard_.setStartupProgressHandler(nullptr, nullptr);
   view_.setIpAddress(ip);
   view_.showStartup();
   probe_.begin();
@@ -36,7 +50,6 @@ void CoolingApp::update()
   if (dashboard_.takePendingSettings(pendingSettings)) {
     applySettings(pendingSettings);
     settingsStore_.save(settings_);
-    dashboard_.setSettings(settings_);
   }
 
   relays_.updateSelfTest(now);
