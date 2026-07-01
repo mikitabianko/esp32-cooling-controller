@@ -1,0 +1,44 @@
+{
+  "C_Cpp.default.configurationProvider": "platformio.platformio-ide",
+  "C_Cpp.default.compileCommands": "${workspaceFolder}/compile_commands.json",
+  "C_Cpp.default.compilerPath": "/Users/mikitabianko/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-g++",
+  "C_Cpp.default.cStandard": "c11",
+  "C_Cpp.default.cppStandard": "gnu++11",
+  "C_Cpp.default.includePath": [
+    "${workspaceFolder}/include",
+    "${workspaceFolder}/src",
+    "${workspaceFolder}/.pio/libdeps/wemos_d1_mini32/**",
+    "${env:HOME}/.platformio/packages/framework-arduinoespressif32/**"
+  ],
+  "C_Cpp.default.browse.path": [
+    "${workspaceFolder}/include",
+    "${workspaceFolder}/src",
+    "${workspaceFolder}/.pio/libdeps/wemos_d1_mini32",
+    "${env:HOME}/.platformio/packages/framework-arduinoespressif32/libraries",
+    "${env:HOME}/.platformio/packages/framework-arduinoespressif32/cores/esp32",
+    "${env:HOME}/.platformio/packages/framework-arduinoespressif32/variants/d1_mini32"
+  ],
+  "C_Cpp.default.browse.databaseFilename": "${workspaceFolder}/.vscode/browse.vc.db",
+  "C_Cpp.workspaceSymbols": "All",
+  "C_Cpp.intelliSenseEngine": "default",
+  "C_Cpp.intelliSenseEngineFallback": "disabled",
+  "C_Cpp.errorSquiggles": "enabled",
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}",
+    "--query-driver=/Users/mikitabianko/.platformio/packages/toolchain-xtensa-esp32/bin/xtensa-esp32-elf-*"
+  ],
+  "clangd.detectExtensionConflicts": true,
+  "platformio-ide.autoRebuildAutocompleteIndex": true,
+  "files.watcherExclude": {
+    "**/.pio/build/**": true,
+    "**/.pio/libdeps/**/.git/**": true
+  },
+  "search.exclude": {
+    "**/.pio/build": true,
+    "**/.pio/libdeps": true
+  },
+  "files.associations": {
+    "*.h": "cpp",
+    "*.cpp": "cpp"
+  }
+}

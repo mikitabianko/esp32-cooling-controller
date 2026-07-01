@@ -1,0 +1,19 @@
+
+Project headers are grouped by responsibility:
+
+```text
+app/        application orchestration
+config/     pins, defaults, limits
+domain/     settings and testable control logic
+hardware/   ESP32 hardware adapters
+storage/    persistence adapters
+ui/         OLED view
+web/        dashboard server and generated pages
+```
+
+Prefer includes that show the layer explicitly, for example:
+
+```cpp
+#include "domain/TemperatureLogic.h"
+#include "hardware/RelayModule.h"
+```

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cooling Controller Dev</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Dev panel</h1>
+      <div class="toolbar">
+        <a href="/">Dashboard</a>
+        <button id="refreshBtn" type="button">Refresh</button>
+        <button id="themeToggle" type="button">Dark theme</button>
+      </div>
+    </header>
+
+    <section class="grid wide">
+      <div class="card"><div class="label">Simulation</div><div id="mode" class="value dev-value">--</div></div>
+      <div class="card"><div class="label">Temperature</div><div id="temperature" class="value dev-value">--</div></div>
+      <div class="card"><div class="label">Peltier</div><div id="peltier" class="value dev-value">--</div></div>
+      <div class="card"><div class="label">Fan</div><div id="fan" class="value dev-value">--</div></div>
+    </section>
+
+    <section class="panel">
+      <form id="devForm">
+        <label class="check"><input id="enabledInput" name="enabled" type="checkbox"> Enable status simulation</label>
+        <label class="label">Temperature, C<input id="temperatureInput" name="temperatureC" type="number" min="-127" max="125" step="0.1"></label>
+        <label class="check"><input id="hasTemperatureInput" name="hasTemperature" type="checkbox"> Has temperature</label>
+        <label class="check"><input id="sensorDisconnectedInput" name="sensorDisconnected" type="checkbox"> Sensor disconnected</label>
+        <label class="check"><input id="peltierInput" name="peltierRunning" type="checkbox"> Peltier ON</label>
+        <label class="check"><input id="fanInput" name="fanRunning" type="checkbox"> Fan ON</label>
+        <label class="check"><input id="runOnInput" name="fanRunOnActive" type="checkbox"> Fan run-on active</label>
+        <label class="label">Run-on remaining, ms<input id="remainingInput" name="fanRunOnRemainingMs" type="number" min="0" max="600000" step="1000"></label>
+        <label class="label">Updates<input id="updatesInput" name="updateCount" type="number" min="0" max="999999" step="1"></label>
+        <div class="toolbar">
+          <button class="primary" type="submit">Apply</button>
+          <button id="resetBtn" type="button">Disable simulation</button>
+          <span id="saveState"></span>
+        </div>
+      </form>
+    </section>
+  </main>
+  <script src="/assets/app.js"></script>
+  <script src="/assets/dev.js"></script>
+</body>
+</html>
