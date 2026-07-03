@@ -34,8 +34,8 @@ first build.
   is disabled.
 - SSD1306 OLED status display with temperature, relay state, settings, timing,
   and network pages.
-- Embedded web dashboard for live status, settings, and a development/simulation
-  view.
+- Embedded web dashboard for live status, settings, and an automatic local demo
+  scene when the board connection is unavailable.
 - Persistent settings stored in ESP32 Preferences/NVS.
 - Native Unity tests for domain logic and generated dashboard embedding.
 
@@ -111,12 +111,10 @@ Built-in routes:
 | Route | Purpose |
 | --- | --- |
 | `/` or `/dashboard.html` | Main dashboard |
-| `/dev` or `/dev.html` | Local/device development state view |
 | `/api/status` | Live status JSON |
 | `/api/history` | Compact in-memory temperature history JSON |
 | `/api/settings` | Read or save controller settings |
 | `/api/networks` | Scan nearby Wi-Fi networks and signal levels |
-| `/api/dev` | Read or save simulated dashboard state |
 
 To add a dashboard page:
 
@@ -135,7 +133,9 @@ python3 tools/web_dev_server.py
 
 The dashboard is served at `http://127.0.0.1:8080/` by default. If the port is
 busy, the helper tries the next available port unless `--no-port-fallback` is
-used. The local server simulates the API endpoints used by the firmware.
+used. If the dashboard cannot reach `/api/status`, it automatically shows the
+local demo scene with simulated temperature readings, target changes, sensor
+disconnects, chart movement, and PNG/CSV export.
 
 ## Build, Upload, and Monitor
 

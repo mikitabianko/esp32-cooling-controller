@@ -28,19 +28,6 @@ DEFAULT_SETTINGS = {
     "stationRssi": 0,
 }
 
-DEFAULT_DEV_STATE = {
-    "ok": True,
-    "enabled": False,
-    "temperatureC": 5.0,
-    "hasTemperature": True,
-    "sensorDisconnected": False,
-    "updateCount": 0,
-    "peltierRunning": False,
-    "fanRunning": False,
-    "fanRunOnActive": False,
-    "fanRunOnRemainingMs": 0,
-}
-
 DEMO_NETWORKS = [
     {"ssid": "Kitchen WiFi", "rssi": -48, "channel": 6, "encrypted": True},
     {"ssid": "Workshop", "rssi": -66, "channel": 11, "encrypted": True},
@@ -52,37 +39,22 @@ class DashboardState:
     def __init__(self):
         self.started_at = monotonic()
         self.settings = dict(DEFAULT_SETTINGS)
-        self.dev_state = dict(DEFAULT_DEV_STATE)
 
     def status(self):
         uptime_ms = int((monotonic() - self.started_at) * 1000)
-        if self.dev_state["enabled"]:
-            status = {
-                "temperatureC": self.dev_state["temperatureC"],
-                "hasTemperature": self.dev_state["hasTemperature"],
-                "sensorDisconnected": self.dev_state["sensorDisconnected"],
-                "updateCount": self.dev_state["updateCount"],
-                "peltierRunning": self.dev_state["peltierRunning"],
-                "fanRunning": self.dev_state["fanRunning"],
-                "fanRunOnActive": self.dev_state["fanRunOnActive"],
-                "fanRunOnRemainingMs": self.dev_state["fanRunOnRemainingMs"],
-                "devMode": True,
-            }
-        else:
-            cycle = uptime_ms // 7000
-            peltier = cycle % 2 == 0
-            run_on = not peltier and (uptime_ms // 3000) % 4 == 0
-            status = {
-                "temperatureC": 5.4,
-                "hasTemperature": True,
-                "sensorDisconnected": False,
-                "updateCount": uptime_ms // 1000,
-                "peltierRunning": peltier,
-                "fanRunning": peltier or run_on,
-                "fanRunOnActive": run_on,
-                "fanRunOnRemainingMs": max(0, 12000 - (uptime_ms % 12000)),
-                "devMode": False,
-            }
+        cycle = uptime_ms // 7000
+        peltier = cycle % 2 == 0
+        run_on = not peltier and (uptime_ms // 3000) % 4 == 0
+        status = {
+            "temperatureC": 5.4,
+            "hasTemperature": True,
+            "sensorDisconnected": False,
+            "updateCount": uptime_ms // 1000,
+            "peltierRunning": peltier,
+            "fanRunning": peltier or run_on,
+            "fanRunOnActive": run_on,
+            "fanRunOnRemainingMs": max(0, 12000 - (uptime_ms % 12000)),
+        }
 
         return {
             **status,
@@ -124,21 +96,6 @@ class DashboardState:
         self.settings["stationIp"] = "192.168.1.88" if self.settings["stationSsid"] else ""
         self.settings["stationRssi"] = -52 if self.settings["stationSsid"] else 0
         return {"ok": True, **self.public_settings()}
-
-    def save_dev_state(self, form):
-        self.dev_state = {
-            "ok": True,
-            "enabled": read_bool(form, "enabled", False),
-            "temperatureC": read_float(form, "temperatureC", 0.0),
-            "hasTemperature": read_bool(form, "hasTemperature", False),
-            "sensorDisconnected": read_bool(form, "sensorDisconnected", False),
-            "updateCount": max(0, read_int(form, "updateCount", 0)),
-            "peltierRunning": read_bool(form, "peltierRunning", False),
-            "fanRunning": read_bool(form, "fanRunning", False),
-            "fanRunOnActive": read_bool(form, "fanRunOnActive", False),
-            "fanRunOnRemainingMs": max(0, read_int(form, "fanRunOnRemainingMs", 0)),
-        }
-        return dict(self.dev_state)
 
     def networks(self):
         return {
@@ -222,9 +179,6 @@ class WebDevHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/networks":
             self.send_json(self.state.networks())
             return
-        if self.path == "/api/dev":
-            self.send_json(self.state.dev_state)
-            return
         return super().do_GET()
 
     def do_POST(self):
@@ -233,9 +187,6 @@ class WebDevHandler(SimpleHTTPRequestHandler):
         form = parse_qs(body, keep_blank_values=True)
         if self.path == "/api/settings":
             self.send_json(self.state.save_settings(form))
-            return
-        if self.path == "/api/dev":
-            self.send_json(self.state.save_dev_state(form))
             return
         self.send_error(404, "Not found")
 
@@ -266,7 +217,7 @@ def main():
     pages = ", ".join(route for route in page_routes())
     print(f"Serving dashboard at {url}")
     print(f"Pages: {pages}")
-    print("API: /api/status, /api/history, /api/settings, /api/networks, /api/dev")
+    print("API: /api/status, /api/history, /api/settings, /api/networks")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

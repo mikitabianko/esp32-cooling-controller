@@ -29,6 +29,9 @@ const char kIndexHtml[] PROGMEM = R"dashboard_html(
   --chart-grid: #d8e1e4;
   --chart-primary: #0f7a5a;
   --chart-secondary: #b15f1b;
+  --chart-target: #7b4db9;
+  --chart-disconnected: rgba(191, 48, 48, 0.16);
+  --chart-selection: rgba(23, 107, 77, 0.16);
   --input: #ffffff;
   --overlay: rgba(12, 18, 20, 0.42);
   --shadow: 0 18px 60px rgba(21, 32, 36, 0.18);
@@ -50,6 +53,9 @@ const char kIndexHtml[] PROGMEM = R"dashboard_html(
   --chart-grid: #2e3b3e;
   --chart-primary: #5ccca1;
   --chart-secondary: #f0a45f;
+  --chart-target: #c4a2ff;
+  --chart-disconnected: rgba(255, 116, 116, 0.18);
+  --chart-selection: rgba(92, 204, 161, 0.18);
   --input: #11181b;
   --overlay: rgba(0, 0, 0, 0.58);
   --shadow: 0 18px 60px rgba(0, 0, 0, 0.36);
@@ -74,6 +80,7 @@ a.button,
   text-decoration: none;
 }
 button.primary { background: var(--primary); color: #ffffff; }
+button:disabled { cursor: not-allowed; opacity: 0.48; }
 .subtle { opacity: 0.72; }
 .danger { color: var(--bad); }
 .actions,
@@ -86,17 +93,21 @@ button.primary { background: var(--primary); color: #ffffff; }
 .label { color: var(--muted); font-size: 13px; }
 .value { margin-top: 8px; font-size: 28px; font-weight: 700; }
 .small { font-size: 18px; }
-.dev-value { font-size: 22px; }
 .ok { color: var(--ok); }
 .bad { color: var(--bad); }
 .chart-panel { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--card); }
 .chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .chart-head h2 { margin-bottom: 4px; }
+.chart-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.chart-actions button { padding: 7px 9px; font-size: 12px; }
 .chart-legend { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; min-height: 22px; }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
 .legend-swatch { width: 22px; height: 3px; border-radius: 999px; background: currentColor; }
 .chart-wrap { position: relative; width: 100%; height: 260px; }
-.chart-wrap canvas { display: block; width: 100%; height: 100%; }
+.chart-wrap canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.chart-tooltip { position: absolute; z-index: 2; display: grid; gap: 2px; min-width: 138px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 9px; background: var(--card); box-shadow: var(--shadow); color: var(--text); font-size: 12px; pointer-events: none; }
+.chart-tooltip.hidden { display: none; }
+.chart-tooltip span { color: var(--muted); }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; pointer-events: none; }
 .chart-empty.hidden { display: none; }
 .panel { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
@@ -172,6 +183,10 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
   header { align-items: flex-start; flex-direction: column; }
   .actions,
   .toolbar { justify-content: flex-start; }
+  .chart-head { flex-direction: column; }
+  .chart-actions { justify-content: flex-start; }
+  .chart-legend { justify-content: flex-start; }
+  .chart-wrap { height: 300px; }
   .settings-overlay { align-items: flex-end; padding: 0; }
   .settings-dialog { width: 100%; max-height: 88vh; border-right: 0; border-bottom: 0; border-left: 0; }
 }
@@ -184,9 +199,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       <h1>Cooling Controller</h1>
       <div class="actions">
         <span id="demoBadge" class="badge hidden">Demo scene</span>
-        <span id="devBadge" class="badge hidden">Dev mode</span>
         <button id="settingsOpen" type="button">Settings</button>
-        <a class="button subtle" href="/dev">Dev</a>
         <button id="themeToggle" type="button">Dark theme</button>
       </div>
     </header>
@@ -205,12 +218,18 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       <div class="chart-head">
         <div>
           <h2 id="temperatureChartTitle">Temperature history</h2>
-          <div id="chartWindow" class="label">Last 30 min</div>
+          <div id="chartWindow" class="label">Startup to now</div>
         </div>
-        <div id="chartLegend" class="chart-legend"></div>
+        <div class="chart-actions">
+          <div id="chartLegend" class="chart-legend"></div>
+          <button id="chartResetZoom" type="button">Reset zoom</button>
+          <button id="chartDownloadPng" type="button">Download PNG</button>
+          <button id="chartDownloadCsv" type="button">Download CSV</button>
+        </div>
       </div>
       <div class="chart-wrap">
         <canvas id="temperatureChart" height="260" aria-label="Temperature over time"></canvas>
+        <div id="chartTooltip" class="chart-tooltip hidden"></div>
         <div id="chartEmpty" class="chart-empty">Waiting for measurements</div>
       </div>
     </section>
@@ -224,8 +243,8 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       <form id="settingsForm">
         <section class="settings-section">
           <h3 class="section-title">Cooling</h3>
-          <label class="label">Target, C<input id="targetInput" name="targetC" type="number" min="-20" max="40" step="0.1" required></label>
-          <label class="label">Hysteresis, C<input id="hysteresisInput" name="hysteresisC" type="number" min="0.1" max="10" step="0.1" required></label>
+          <label class="label">Target, °C<input id="targetInput" name="targetC" type="number" min="-20" max="40" step="0.1" required></label>
+          <label class="label">Hysteresis, °C<input id="hysteresisInput" name="hysteresisC" type="number" min="0.1" max="10" step="0.1" required></label>
           <label class="label">Measurement, ms<input id="measurementInput" name="measurementIntervalMs" type="number" min="250" max="60000" step="50" required></label>
           <label class="label">Fan run-on, ms<input id="fanRunOnInput" name="fanRunOnMs" type="number" min="0" max="600000" step="1000" required></label>
         </section>
@@ -277,32 +296,9 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 (function () {
   const storageKeys = {
     theme: 'cooling-dashboard.theme',
-    legacyTheme: 'theme',
-    devState: 'cooling-dashboard.devState'
-  };
-  const defaultDevState = {
-    ok: true,
-    enabled: false,
-    temperatureC: 5.0,
-    hasTemperature: true,
-    sensorDisconnected: false,
-    updateCount: 0,
-    peltierRunning: false,
-    fanRunning: false,
-    fanRunOnActive: false,
-    fanRunOnRemainingMs: 0
+    legacyTheme: 'theme'
   };
   const setText = (id, text) => document.getElementById(id).textContent = text;
-  const readStoredDevState = () => {
-    try {
-      return { ...defaultDevState, ...JSON.parse(localStorage.getItem(storageKeys.devState) || '{}') };
-    } catch (error) {
-      return { ...defaultDevState };
-    }
-  };
-  const storeDevState = (data) => {
-    localStorage.setItem(storageKeys.devState, JSON.stringify({ ...defaultDevState, ...data }));
-  };
   const initTheme = () => {
     const themeToggle = document.getElementById('themeToggle');
     if (!themeToggle) return;
@@ -319,10 +315,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
   };
   window.CoolingWeb = {
     storageKeys,
-    defaultDevState,
     initTheme,
-    readStoredDevState,
-    storeDevState,
     setText
   };
   document.addEventListener('DOMContentLoaded', initTheme);
@@ -331,99 +324,106 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
   </script>
   <script>
 (function () {
-  const { readStoredDevState, setText } = window.CoolingWeb;
+  const { setText } = window.CoolingWeb;
   const startedAt = Date.now();
-  const chartHistoryMs = 30 * 60 * 1000;
-  const temperatureSeries = [
-    {
-      id: 'probe1',
-      label: 'Probe 1',
-      valueKey: 'temperatureC',
-      hasKey: 'hasTemperature',
-      invalidKey: 'sensorDisconnected',
-      updateCountKey: 'updateCount',
-      colorVar: '--chart-primary',
-      primary: true
-    },
-    {
-      id: 'probe2',
-      label: 'Probe 2',
-      valueKey: 'secondaryTemperatureC',
-      hasKey: 'hasSecondaryTemperature',
-      invalidKey: 'secondarySensorDisconnected',
-      updateCountKey: 'secondaryUpdateCount',
-      colorVar: '--chart-secondary'
-    }
-  ];
-  const chartSamples = new Map(temperatureSeries.map((series) => [series.id, []]));
-  const lastChartSampleKeys = new Map();
+  const minChartWindowMs = 5 * 60 * 1000;
+  const keepaliveMs = 30 * 1000;
+  const disconnectedFlag = 1;
+  const chartSamples = [];
+  const fallbackScene = {
+    targetC: 5.0,
+    rawTemperatureC: 5.6,
+    liveFilteredC: null,
+    updateCount: 0,
+    disconnectedUntilMs: 0,
+    nextDisconnectAtMs: 22000,
+    nextTargetChangeAtMs: 36000
+  };
   let lastChartUptimeMs = 0;
+  let lastChartSampleKey = '';
+  let zoomRange = null;
+  let pointerState = null;
   const setState = (id, on) => {
     const el = document.getElementById(id);
     el.textContent = on ? 'ON' : 'OFF';
     el.className = 'value small ' + (on ? 'ok' : '');
   };
-  const isSeriesAvailable = (series, data) => (
-    series.primary || Object.prototype.hasOwnProperty.call(data, series.valueKey)
-  );
-  const hasValidSeriesValue = (series, data) => {
-    const value = Number(data[series.valueKey]);
-    const hasValue = series.hasKey ? Boolean(data[series.hasKey]) : Number.isFinite(value);
-    const invalid = series.invalidKey ? Boolean(data[series.invalidKey]) : false;
-    return hasValue && !invalid && Number.isFinite(value);
-  };
   const sampleTimeMs = (data) => {
     const uptimeMs = Number(data.uptimeMs);
     return Number.isFinite(uptimeMs) ? uptimeMs : Date.now() - startedAt;
   };
-  const trimChartSamples = (samples, latestTimeMs) => {
-    const cutoffMs = latestTimeMs - chartHistoryMs;
-    while (samples.length && samples[0].timeMs < cutoffMs) {
-      samples.shift();
-    }
+  const formatTemperature = (value) => (
+    Number.isFinite(value) ? value.toFixed(1) + ' °C' : '--'
+  );
+  const formatTime = (timeMs) => {
+    const seconds = Math.max(0, Math.round(timeMs / 1000));
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return minutes + ':' + String(remainingSeconds).padStart(2, '0');
   };
-  const addSeriesSample = (series, timeMs, value) => {
-    const samples = chartSamples.get(series.id);
-    if (!samples || !Number.isFinite(timeMs) || !Number.isFinite(value)) return;
-    if (samples.some((sample) => sample.timeMs === timeMs)) return;
-    samples.push({ timeMs, value });
-    samples.sort((left, right) => left.timeMs - right.timeMs);
-    trimChartSamples(samples, Math.max(timeMs, lastChartUptimeMs));
+  const latestChartTime = () => Math.max(lastChartUptimeMs, ...chartSamples.map((sample) => sample.timeMs), 0);
+  const pushChartSample = (sample) => {
+    if (!Number.isFinite(sample.timeMs)) return;
+    const existing = chartSamples.findIndex((item) => item.timeMs === sample.timeMs);
+    if (existing >= 0) chartSamples.splice(existing, 1);
+    chartSamples.push(sample);
+    chartSamples.sort((left, right) => left.timeMs - right.timeMs);
+    lastChartUptimeMs = Math.max(lastChartUptimeMs, sample.timeMs);
   };
   const addChartSample = (data) => {
     const timeMs = sampleTimeMs(data);
     if (timeMs + 1000 < lastChartUptimeMs) {
-      chartSamples.forEach((samples) => samples.splice(0, samples.length));
-      lastChartSampleKeys.clear();
+      chartSamples.splice(0, chartSamples.length);
+      lastChartSampleKey = '';
+      zoomRange = null;
     }
     lastChartUptimeMs = timeMs;
-
-    temperatureSeries.forEach((series) => {
-      if (!isSeriesAvailable(series, data)) return;
-      const samples = chartSamples.get(series.id);
-      const count = series.updateCountKey && data[series.updateCountKey] !== undefined
-        ? data[series.updateCountKey]
-        : Math.floor(timeMs / 1000);
-      const sampleKey = String(count) + ':' + String(data[series.valueKey]);
-      if (lastChartSampleKeys.get(series.id) === sampleKey) return;
-      lastChartSampleKeys.set(series.id, sampleKey);
-      if (hasValidSeriesValue(series, data)) {
-        addSeriesSample(series, timeMs, Number(data[series.valueKey]));
-      } else {
-        trimChartSamples(samples, timeMs);
-      }
+    const disconnected = Boolean(data.sensorDisconnected) || !data.hasTemperature;
+    const temperature = disconnected ? null : Number(data.filteredTemperatureC ?? data.temperatureC);
+    const target = Number(data.targetC);
+    const sampleKey = [
+      data.updateCount,
+      disconnected ? 'x' : temperature.toFixed(2),
+      Number.isFinite(target) ? target.toFixed(2) : ''
+    ].join(':');
+    if (lastChartSampleKey === sampleKey) return;
+    lastChartSampleKey = sampleKey;
+    pushChartSample({
+      timeMs,
+      temperature: Number.isFinite(temperature) ? temperature : null,
+      target: Number.isFinite(target) ? target : null,
+      disconnected,
+      sensorValid: !disconnected,
+      status: disconnected ? 'unavailable' : 'ok',
+      flags: disconnected ? disconnectedFlag : 0
     });
+    const cutoffMs = latestChartTime() - Math.max(minChartWindowMs, keepaliveMs * 4);
+    while (chartSamples.length > 1200 && chartSamples[0].timeMs < cutoffMs) chartSamples.shift();
   };
   const applyHistory = (history) => {
     if (!history || !Array.isArray(history.series)) return;
+    chartSamples.splice(0, chartSamples.length);
+    lastChartUptimeMs = 0;
+    lastChartSampleKey = '';
+    zoomRange = null;
     history.series.forEach((remoteSeries) => {
-      const series = temperatureSeries.find((item) => item.id === remoteSeries.id);
-      if (!series || !Array.isArray(remoteSeries.points)) return;
+      if (remoteSeries.id !== 'probe1' || !Array.isArray(remoteSeries.points)) return;
       remoteSeries.points.forEach((point) => {
-        if (!Array.isArray(point) || point.length < 2) return;
-        const flags = Number(point[2]) || 0;
-        if ((flags & 1) !== 0) return;
-        addSeriesSample(series, Number(point[0]), Number(point[1]) / 10);
+        if (!Array.isArray(point) || point.length < 4) return;
+        const flags = Number(point[3]) || 0;
+        const disconnected =
+          point.length > 5 ? Number(point[5]) === 1 : (flags & disconnectedFlag) !== 0;
+        const sensorValid =
+          point.length > 4 ? Number(point[4]) === 1 : !disconnected;
+        pushChartSample({
+          timeMs: Number(point[0]),
+          temperature: disconnected ? null : Number(point[1]) / 10,
+          target: Number(point[2]) / 10,
+          disconnected,
+          sensorValid,
+          status: sensorValid ? 'ok' : 'unavailable',
+          flags
+        });
       });
     });
   };
@@ -437,24 +437,28 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       // History is optional; live samples will continue filling the chart.
     }
   };
-  const formatAgo = (ms) => {
-    const minutes = Math.max(0, Math.round(ms / 60000));
-    return minutes <= 0 ? 'now' : '-' + minutes + ' min';
-  };
-  const chartColors = (canvas, series) => {
+  const chartColors = () => {
     const style = getComputedStyle(document.documentElement);
     return {
       text: style.getPropertyValue('--muted').trim(),
       grid: style.getPropertyValue('--chart-grid').trim(),
-      line: style.getPropertyValue(series.colorVar).trim()
+      temperature: style.getPropertyValue('--chart-primary').trim(),
+      target: style.getPropertyValue('--chart-target').trim(),
+      disconnected: style.getPropertyValue('--chart-disconnected').trim(),
+      selection: style.getPropertyValue('--chart-selection').trim(),
+      background: style.getPropertyValue('--card').trim()
     };
   };
   const renderChartLegend = (legend) => {
     legend.textContent = '';
-    temperatureSeries.filter((series) => chartSamples.get(series.id).length > 0).forEach((series) => {
+    [
+      { label: 'Filtered temperature', color: '--chart-primary' },
+      { label: 'Target temperature', color: '--chart-target' },
+      { label: 'Sensor unavailable', color: '--chart-disconnected' }
+    ].forEach((series) => {
       const item = document.createElement('span');
       item.className = 'legend-item';
-      item.style.color = getComputedStyle(document.documentElement).getPropertyValue(series.colorVar).trim();
+      item.style.color = getComputedStyle(document.documentElement).getPropertyValue(series.color).trim();
       const swatch = document.createElement('span');
       swatch.className = 'legend-swatch';
       const label = document.createElement('span');
@@ -463,53 +467,115 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       legend.append(item);
     });
   };
-  const drawTemperatureChart = () => {
-    const canvas = document.getElementById('temperatureChart');
-    const empty = document.getElementById('chartEmpty');
-    const legend = document.getElementById('chartLegend');
-    if (!canvas || !empty || !legend) return;
-
-    const allSamples = temperatureSeries.flatMap((series) => chartSamples.get(series.id));
-    empty.classList.toggle('hidden', allSamples.length > 0);
-    renderChartLegend(legend);
-
-    const rect = canvas.getBoundingClientRect();
+  const chartRange = (full) => {
+    const latest = latestChartTime();
+    const fullEnd = Math.max(minChartWindowMs, latest);
+    if (full) return { startMs: 0, endMs: fullEnd, spanMs: fullEnd };
+    if (zoomRange) {
+      const rawStartMs = Math.min(zoomRange.startMs, zoomRange.endMs);
+      const rawEndMs = Math.max(zoomRange.startMs, zoomRange.endMs);
+      const spanMs = Math.max(1000, rawEndMs - rawStartMs);
+      const startMs = clamp(rawStartMs, 0, Math.max(0, fullEnd - spanMs));
+      const endMs = startMs + spanMs;
+      zoomRange = { startMs, endMs };
+      return { startMs, endMs, spanMs: endMs - startMs };
+    }
+    return { startMs: 0, endMs: fullEnd, spanMs: fullEnd };
+  };
+  const panZoomRange = (deltaMs) => {
+    if (!zoomRange || !Number.isFinite(deltaMs)) return false;
+    const fullEnd = Math.max(minChartWindowMs, latestChartTime());
+    const startMs = Math.min(zoomRange.startMs, zoomRange.endMs);
+    const endMs = Math.max(zoomRange.startMs, zoomRange.endMs);
+    const spanMs = Math.max(1000, endMs - startMs);
+    const nextStartMs = clamp(startMs + deltaMs, 0, Math.max(0, fullEnd - spanMs));
+    zoomRange = { startMs: nextStartMs, endMs: nextStartMs + spanMs };
+    return true;
+  };
+  const drawChartInto = (canvas, full) => {
+    const rect = full ? { width: 1200, height: 620 } : canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
-    const width = Math.max(1, Math.round(rect.width * dpr));
-    const height = Math.max(1, Math.round(rect.height * dpr));
+    const width = Math.max(1, Math.round(rect.width * (full ? 1 : dpr)));
+    const height = Math.max(1, Math.round(rect.height * (full ? 1 : dpr)));
     if (canvas.width !== width || canvas.height !== height) {
       canvas.width = width;
       canvas.height = height;
     }
 
     const ctx = canvas.getContext('2d');
+    const colors = chartColors();
     ctx.clearRect(0, 0, width, height);
-    if (!allSamples.length) return;
+    if (full) {
+      ctx.fillStyle = colors.background;
+      ctx.fillRect(0, 0, width, height);
+    }
+    if (!chartSamples.length) return null;
 
-    const nowMs = Math.max(...allSamples.map((sample) => sample.timeMs));
-    const startMs = Math.max(0, nowMs - chartHistoryMs);
-    const minValue = Math.min(...allSamples.map((sample) => sample.value));
-    const maxValue = Math.max(...allSamples.map((sample) => sample.value));
+    const range = chartRange(full);
+    const visibleSamples = chartSamples.filter((sample) => sample.timeMs >= range.startMs && sample.timeMs <= range.endMs);
+    const firstAfterStart = chartSamples.findIndex((sample) => sample.timeMs >= range.startMs);
+    const beforeRange = firstAfterStart > 0
+      ? chartSamples[firstAfterStart - 1]
+      : (firstAfterStart < 0 ? chartSamples[chartSamples.length - 1] : null);
+    const firstAfterEnd = chartSamples.find((sample) => sample.timeMs > range.endMs);
+    const plotSamples = [beforeRange, ...visibleSamples, firstAfterEnd]
+      .filter(Boolean)
+      .filter((sample, index, samples) => samples.findIndex((item) => item.timeMs === sample.timeMs) === index)
+      .sort((left, right) => left.timeMs - right.timeMs);
+    const values = plotSamples.flatMap((sample) => [sample.temperature, sample.target].filter(Number.isFinite));
+    if (!values.length) return null;
+    const minValue = Math.min(...values);
+    const maxValue = Math.max(...values);
     const valuePadding = Math.max(0.5, (maxValue - minValue) * 0.18);
     const yMin = Math.floor((minValue - valuePadding) * 2) / 2;
     const yMax = Math.ceil((maxValue + valuePadding) * 2) / 2;
     const span = Math.max(1, yMax - yMin);
+    const scale = full ? 1 : dpr;
     const pad = {
-      left: 42 * dpr,
-      right: 10 * dpr,
-      top: 12 * dpr,
-      bottom: 28 * dpr
+      left: 76 * scale,
+      right: 18 * scale,
+      top: (full ? 54 : 18) * scale,
+      bottom: 50 * scale
     };
     const plotW = Math.max(1, width - pad.left - pad.right);
     const plotH = Math.max(1, height - pad.top - pad.bottom);
-    const axisColor = chartColors(canvas, temperatureSeries[0]);
-    const xFor = (timeMs) => pad.left + ((timeMs - startMs) / chartHistoryMs) * plotW;
+    const xFor = (timeMs) => pad.left + ((timeMs - range.startMs) / range.spanMs) * plotW;
     const yFor = (value) => pad.top + (1 - ((value - yMin) / span)) * plotH;
 
-    ctx.font = String(11 * dpr) + 'px system-ui, sans-serif';
-    ctx.lineWidth = 1 * dpr;
-    ctx.strokeStyle = axisColor.grid;
-    ctx.fillStyle = axisColor.text;
+    plotSamples.forEach((sample, index) => {
+      if (!sample.disconnected) return;
+      const previous = plotSamples[index - 1];
+      if (previous && previous.disconnected) return;
+      let lastDisconnected = sample;
+      let nextValid = null;
+      for (let i = index + 1; i < plotSamples.length; i += 1) {
+        if (!plotSamples[i].disconnected) {
+          nextValid = plotSamples[i];
+          break;
+        }
+        lastDisconnected = plotSamples[i];
+      }
+      const rawZoneStart = previous
+        ? previous.timeMs + (sample.timeMs - previous.timeMs) / 2
+        : sample.timeMs;
+      const rawZoneEnd = nextValid
+        ? lastDisconnected.timeMs + (nextValid.timeMs - lastDisconnected.timeMs) / 2
+        : Math.min(range.endMs, lastDisconnected.timeMs + keepaliveMs);
+      const zoneStart = clamp(rawZoneStart, range.startMs, range.endMs);
+      const zoneEnd = clamp(
+        rawZoneEnd,
+        range.startMs,
+        range.endMs
+      );
+      if (zoneEnd <= zoneStart) return;
+      ctx.fillStyle = colors.disconnected;
+      ctx.fillRect(xFor(zoneStart), pad.top, Math.max(1, xFor(zoneEnd) - xFor(zoneStart)), plotH);
+    });
+
+    ctx.font = String(11 * scale) + 'px system-ui, sans-serif';
+    ctx.lineWidth = 1 * scale;
+    ctx.strokeStyle = colors.grid;
+    ctx.fillStyle = colors.text;
     ctx.textBaseline = 'middle';
 
     for (let i = 0; i <= 4; i += 1) {
@@ -520,49 +586,380 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       ctx.lineTo(width - pad.right, y);
       ctx.stroke();
       ctx.textAlign = 'right';
-      ctx.fillText(value.toFixed(1), pad.left - 8 * dpr, y);
+      ctx.fillText(value.toFixed(1) + ' °C', pad.left - 8 * scale, y);
     }
 
     ctx.textBaseline = 'top';
     for (let i = 0; i <= 3; i += 1) {
       const x = pad.left + (plotW / 3) * i;
-      const ageMs = chartHistoryMs - (chartHistoryMs / 3) * i;
+      const timeMs = range.startMs + (range.spanMs / 3) * i;
       ctx.beginPath();
       ctx.moveTo(x, pad.top);
       ctx.lineTo(x, pad.top + plotH);
       ctx.stroke();
       ctx.textAlign = i === 0 ? 'left' : (i === 3 ? 'right' : 'center');
-      ctx.fillText(formatAgo(ageMs), x, pad.top + plotH + 8 * dpr);
+      ctx.fillText(formatTime(timeMs), x, pad.top + plotH + 8 * scale);
     }
 
-    temperatureSeries.forEach((series) => {
-      const samples = chartSamples.get(series.id).filter((sample) => sample.timeMs >= startMs);
-      if (!samples.length) return;
-      ctx.strokeStyle = chartColors(canvas, series).line;
-      ctx.lineWidth = 2 * dpr;
+    ctx.strokeStyle = colors.text;
+    ctx.lineWidth = 1 * scale;
+    ctx.beginPath();
+    ctx.moveTo(pad.left, pad.top);
+    ctx.lineTo(pad.left, pad.top + plotH);
+    ctx.lineTo(pad.left + plotW, pad.top + plotH);
+    ctx.stroke();
+
+    ctx.fillStyle = colors.text;
+    ctx.font = String(12 * scale) + 'px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('Uptime', pad.left + plotW / 2, height - 4 * scale);
+    ctx.save();
+    ctx.translate(13 * scale, pad.top + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textBaseline = 'top';
+    ctx.fillText('Temperature, °C', 0, 0);
+    ctx.restore();
+
+    const drawLine = (key, color, allowGaps) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2 * scale;
+      let drawing = false;
+      ctx.save();
       ctx.beginPath();
-      samples.forEach((sample, index) => {
+      ctx.rect(pad.left, pad.top, plotW, plotH);
+      ctx.clip();
+      ctx.beginPath();
+      const lineSamples = plotSamples.filter((sample) => (
+        Number.isFinite(sample[key]) && !(allowGaps && sample.disconnected)
+      ));
+      if (lineSamples.length === 1 && key === 'target') {
+        const y = yFor(lineSamples[0][key]);
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(pad.left + plotW, y);
+      }
+      plotSamples.forEach((sample) => {
+        const value = sample[key];
+        if (!Number.isFinite(value) || (allowGaps && sample.disconnected)) {
+          drawing = false;
+          return;
+        }
         const x = xFor(sample.timeMs);
-        const y = yFor(sample.value);
-        if (index === 0) ctx.moveTo(x, y);
+        const y = yFor(value);
+        if (!drawing) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
+        drawing = true;
       });
       ctx.stroke();
+      ctx.restore();
+    };
+    drawLine('target', colors.target, false);
+    drawLine('temperature', colors.temperature, true);
+
+    if (full) {
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'left';
+      ctx.font = '16px system-ui, sans-serif';
+      ctx.fillStyle = colors.text;
+      ctx.fillText('Temperature history', pad.left, 22);
+      [
+        ['Filtered temperature', colors.temperature],
+        ['Target temperature', colors.target],
+        ['Sensor unavailable', colors.disconnected]
+      ].forEach((item, index) => {
+        const x = pad.left + index * 230;
+        const y = 42;
+        ctx.fillStyle = item[1];
+        ctx.fillRect(x, y - 2, 34, 4);
+        ctx.fillStyle = colors.text;
+        ctx.fillText(item[0], x + 44, y);
+      });
+    }
+
+    if (!full && pointerState && pointerState.dragging && pointerState.mode === 'zoom') {
+      ctx.fillStyle = colors.selection;
+      const left = Math.max(pad.left, Math.min(pointerState.startX, pointerState.currentX));
+      const right = Math.min(pad.left + plotW, Math.max(pointerState.startX, pointerState.currentX));
+      ctx.fillRect(left, pad.top, right - left, plotH);
+    }
+    return { pad, plotW, plotH, range, xFor, yFor, visibleSamples };
+  };
+  const drawTemperatureChart = () => {
+    const canvas = document.getElementById('temperatureChart');
+    const empty = document.getElementById('chartEmpty');
+    const legend = document.getElementById('chartLegend');
+    const chartWindow = document.getElementById('chartWindow');
+    const chartResetZoom = document.getElementById('chartResetZoom');
+    if (!canvas || !empty || !legend) return;
+    empty.classList.toggle('hidden', chartSamples.length > 0);
+    renderChartLegend(legend);
+    const geometry = drawChartInto(canvas, false);
+    if (chartWindow) {
+      const range = chartRange(false);
+      chartWindow.textContent = zoomRange
+        ? 'Zoom ' + formatTime(range.startMs) + ' to ' + formatTime(range.endMs)
+        : 'Startup to ' + formatTime(latestChartTime());
+    }
+    if (chartResetZoom) {
+      chartResetZoom.disabled = !zoomRange;
+      chartResetZoom.textContent = zoomRange ? 'Show full range' : 'Full range';
+      chartResetZoom.setAttribute('aria-disabled', zoomRange ? 'false' : 'true');
+      chartResetZoom.title = zoomRange
+        ? 'Return to the full temperature history'
+        : 'The full temperature history is already visible';
+    }
+    return geometry;
+  };
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+  const pointerPoint = (canvas, event) => {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    const cssX = event.clientX - rect.left;
+    const cssY = event.clientY - rect.top;
+    return { cssX, cssY, x: cssX * dpr, y: cssY * dpr };
+  };
+  const inPlotArea = (geometry, point) => (
+    point.x >= geometry.pad.left &&
+    point.x <= geometry.pad.left + geometry.plotW &&
+    point.y >= geometry.pad.top &&
+    point.y <= geometry.pad.top + geometry.plotH
+  );
+  const clampToPlotX = (geometry, x) => (
+    clamp(x, geometry.pad.left, geometry.pad.left + geometry.plotW)
+  );
+  const nearestSample = (canvas, event) => {
+    const geometry = drawTemperatureChart();
+    if (!geometry) return null;
+    const point = pointerPoint(canvas, event);
+    if (!inPlotArea(geometry, point)) return null;
+    const candidates = geometry.visibleSamples.map((sample) => ({
+      sample,
+      distance: Math.abs(geometry.xFor(sample.timeMs) - point.x)
+    })).sort((left, right) => left.distance - right.distance);
+    if (!candidates.length) return null;
+    return { sample: candidates[0].sample, ...point };
+  };
+  const showTooltip = (point) => {
+    const tooltip = document.getElementById('chartTooltip');
+    if (!tooltip || !point) {
+      if (tooltip) tooltip.classList.add('hidden');
+      return;
+    }
+    tooltip.innerHTML = [
+      '<strong>' + formatTime(point.sample.timeMs) + '</strong>',
+      '<span>Temperature: ' + formatTemperature(point.sample.temperature) + '</span>',
+      '<span>Target: ' + formatTemperature(point.sample.target) + '</span>'
+    ].join('');
+    tooltip.style.left = Math.min(point.cssX + 12, tooltip.parentElement.clientWidth - 150) + 'px';
+    tooltip.style.top = Math.max(8, point.cssY - 52) + 'px';
+    tooltip.classList.remove('hidden');
+  };
+  const downloadCsvFromSamples = () => {
+    const rows = [['timestamp_ms', 'filtered_temperature_c', 'target_temperature_c', 'sensor_status', 'sensor_valid', 'sensor_disconnected', 'flags']];
+    chartSamples.forEach((sample) => {
+      rows.push([
+        Math.round(sample.timeMs),
+        Number.isFinite(sample.temperature) ? sample.temperature.toFixed(1) : '',
+        Number.isFinite(sample.target) ? sample.target.toFixed(1) : '',
+        sample.status || (sample.disconnected ? 'unavailable' : 'ok'),
+        sample.sensorValid === false || sample.disconnected ? '0' : '1',
+        sample.disconnected ? '1' : '0',
+        String(sample.flags || 0)
+      ]);
+    });
+    const csv = rows.map((row) => row.map((cell) => '"' + String(cell).replace(/"/g, '""') + '"').join(',')).join('\n');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    link.download = 'cooling-history.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+  const downloadCsv = async () => {
+    try {
+      const res = await fetch('/api/history.csv', { cache: 'no-store' });
+      if (!res.ok) throw new Error('csv unavailable');
+      const blob = await res.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'cooling-history.csv';
+      link.click();
+      URL.revokeObjectURL(link.href);
+    } catch (error) {
+      downloadCsvFromSamples();
+    }
+  };
+  const downloadPng = () => {
+    const canvas = document.createElement('canvas');
+    drawChartInto(canvas, true);
+    const link = document.createElement('a');
+    link.href = canvas.toDataURL('image/png');
+    link.download = 'cooling-chart.png';
+    link.click();
+  };
+  const resetChartZoom = () => {
+    if (!zoomRange) return;
+    zoomRange = null;
+    showTooltip(null);
+    drawTemperatureChart();
+  };
+  const clearChartSamples = () => {
+    chartSamples.splice(0, chartSamples.length);
+    lastChartUptimeMs = 0;
+    lastChartSampleKey = '';
+    zoomRange = null;
+    showTooltip(null);
+    drawTemperatureChart();
+  };
+  const replaceChartSamples = (samples) => {
+    chartSamples.splice(0, chartSamples.length);
+    lastChartUptimeMs = 0;
+    lastChartSampleKey = '';
+    zoomRange = null;
+    (samples || []).forEach(pushChartSample);
+    drawTemperatureChart();
+  };
+  const attachChartInteractions = (chartCanvas) => {
+    if (!chartCanvas || chartCanvas.dataset.chartInteractions === '1') return;
+    chartCanvas.dataset.chartInteractions = '1';
+    const stopPointerDrag = () => {
+      pointerState = null;
+      showTooltip(null);
+      drawTemperatureChart();
+    };
+    chartCanvas.addEventListener('pointerdown', (event) => {
+      const geometry = drawTemperatureChart();
+      const point = pointerPoint(chartCanvas, event);
+      if (!geometry || !inPlotArea(geometry, point)) {
+        showTooltip(null);
+        return;
+      }
+      const x = clampToPlotX(geometry, point.x);
+      const activeRange = chartRange(false);
+      pointerState = {
+        mode: zoomRange ? 'pan' : 'zoom',
+        startX: x,
+        currentX: x,
+        startRange: { startMs: activeRange.startMs, endMs: activeRange.endMs },
+        dragging: false
+      };
+      chartCanvas.setPointerCapture(event.pointerId);
+      showTooltip(null);
+    });
+    chartCanvas.addEventListener('pointermove', (event) => {
+      if (pointerState) {
+        const geometry = drawTemperatureChart();
+        const point = pointerPoint(chartCanvas, event);
+        const dpr = window.devicePixelRatio || 1;
+        pointerState.currentX = geometry ? clampToPlotX(geometry, point.x) : point.x;
+        pointerState.dragging = Math.abs(pointerState.currentX - pointerState.startX) > 8 * dpr;
+        if (geometry && pointerState.dragging && pointerState.mode === 'pan') {
+          const spanMs = Math.max(1000, pointerState.startRange.endMs - pointerState.startRange.startMs);
+          const deltaMs = ((pointerState.startX - pointerState.currentX) / geometry.plotW) * spanMs;
+          zoomRange = {
+            startMs: pointerState.startRange.startMs,
+            endMs: pointerState.startRange.endMs
+          };
+          panZoomRange(deltaMs);
+        }
+      }
+      if (pointerState && pointerState.dragging) showTooltip(null);
+      else showTooltip(nearestSample(chartCanvas, event));
+      drawTemperatureChart();
+    });
+    chartCanvas.addEventListener('wheel', (event) => {
+      if (!zoomRange) return;
+      const geometry = drawTemperatureChart();
+      if (!geometry) return;
+      const point = pointerPoint(chartCanvas, event);
+      if (!inPlotArea(geometry, point)) return;
+      event.preventDefault();
+      const wheelDelta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+        ? event.deltaX
+        : event.deltaY;
+      const deltaMs = (wheelDelta / geometry.plotW) * geometry.range.spanMs;
+      if (panZoomRange(deltaMs)) {
+        showTooltip(null);
+        drawTemperatureChart();
+      }
+    }, { passive: false });
+    chartCanvas.addEventListener('pointerup', (event) => {
+      if (pointerState && pointerState.dragging && pointerState.mode === 'zoom') {
+        const geometry = drawTemperatureChart();
+        if (geometry) {
+          pointerState.currentX = clampToPlotX(geometry, pointerPoint(chartCanvas, event).x);
+          const left = Math.max(geometry.pad.left, Math.min(pointerState.startX, pointerState.currentX));
+          const right = Math.min(geometry.pad.left + geometry.plotW, Math.max(pointerState.startX, pointerState.currentX));
+          if (right - left > 12) {
+            const startMs = geometry.range.startMs +
+              ((left - geometry.pad.left) / geometry.plotW) * geometry.range.spanMs;
+            const endMs = geometry.range.startMs +
+              ((right - geometry.pad.left) / geometry.plotW) * geometry.range.spanMs;
+            zoomRange = { startMs, endMs };
+          }
+        }
+      }
+      showTooltip(null);
+      if (chartCanvas.hasPointerCapture && chartCanvas.hasPointerCapture(event.pointerId)) {
+        chartCanvas.releasePointerCapture(event.pointerId);
+      }
+      pointerState = null;
+      drawTemperatureChart();
+    });
+    chartCanvas.addEventListener('pointercancel', stopPointerDrag);
+    chartCanvas.addEventListener('lostpointercapture', () => {
+      if (pointerState) stopPointerDrag();
+    });
+    chartCanvas.addEventListener('pointerleave', () => {
+      if (!pointerState) showTooltip(null);
     });
   };
-  const mockStatus = () => {
+  window.CoolingChart = {
+    addStatusSample: addChartSample,
+    addSample: pushChartSample,
+    applyHistory,
+    clear: clearChartSamples,
+    replaceSamples: replaceChartSamples,
+    draw: drawTemperatureChart,
+    resetZoom: resetChartZoom,
+    attachInteractions: attachChartInteractions,
+    downloadPng,
+    downloadCsv: downloadCsvFromSamples,
+    samples: chartSamples
+  };
+  const lowPass = (previous, current, alpha) => (
+    Number.isFinite(previous) ? previous + (current - previous) * alpha : current
+  );
+  const fallbackStatus = () => {
     const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= fallbackScene.nextTargetChangeAtMs) {
+      fallbackScene.targetC = 4.4 + Math.random() * 1.8;
+      fallbackScene.nextTargetChangeAtMs = elapsedMs + 28000 + Math.random() * 34000;
+    }
+    if (elapsedMs >= fallbackScene.nextDisconnectAtMs) {
+      fallbackScene.disconnectedUntilMs = elapsedMs + 4500 + Math.random() * 4500;
+      fallbackScene.nextDisconnectAtMs = elapsedMs + 38000 + Math.random() * 28000;
+    }
+    const disconnected = elapsedMs < fallbackScene.disconnectedUntilMs;
+    if (!disconnected) {
+      const targetPull = (fallbackScene.targetC - fallbackScene.rawTemperatureC) * 0.018;
+      const baselineWave = Math.sin(elapsedMs / 26000) * 0.035;
+      const noise = (Math.random() * 2 - 1) * 0.1;
+      fallbackScene.rawTemperatureC += targetPull + baselineWave + noise;
+      fallbackScene.liveFilteredC = lowPass(fallbackScene.liveFilteredC, fallbackScene.rawTemperatureC, 0.65);
+    }
+    fallbackScene.updateCount += 1;
     const peltierRunning = Math.floor(elapsedMs / 7000) % 2 === 0;
     return {
-      temperatureC: 5.4 + Math.sin(elapsedMs / 3500) * 0.8,
-      hasTemperature: true,
-      sensorDisconnected: false,
-      updateCount: Math.floor(elapsedMs / 1000),
+      temperatureC: Number.isFinite(fallbackScene.liveFilteredC) ? fallbackScene.liveFilteredC : fallbackScene.rawTemperatureC,
+      filteredTemperatureC: Number.isFinite(fallbackScene.liveFilteredC) ? fallbackScene.liveFilteredC : fallbackScene.rawTemperatureC,
+      hasTemperature: !disconnected,
+      sensorDisconnected: disconnected,
+      updateCount: fallbackScene.updateCount,
       peltierRunning,
       fanRunning: peltierRunning || Math.floor(elapsedMs / 3000) % 5 === 0,
       fanRunOnActive: !peltierRunning && Math.floor(elapsedMs / 3000) % 5 === 0,
       fanRunOnRemainingMs: 12000 - (elapsedMs % 12000),
-      targetC: 5.0,
+      targetC: fallbackScene.targetC,
       hysteresisC: 0.1,
       measurementIntervalMs: 500,
       fanRunOnMs: 30000,
@@ -575,35 +972,9 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       stationStatus: 'disabled',
       stationIp: '',
       stationRssi: 0,
-      devMode: false,
       demo: true
     };
   };
-  const mockFromDevState = (devState, elapsedMs) => ({
-    temperatureC: Number(devState.temperatureC) || 0,
-    hasTemperature: Boolean(devState.hasTemperature),
-    sensorDisconnected: Boolean(devState.sensorDisconnected),
-    updateCount: Number(devState.updateCount) || 0,
-    peltierRunning: Boolean(devState.peltierRunning),
-    fanRunning: Boolean(devState.fanRunning),
-    fanRunOnActive: Boolean(devState.fanRunOnActive),
-    fanRunOnRemainingMs: Number(devState.fanRunOnRemainingMs) || 0,
-    targetC: 5.0,
-    hysteresisC: 0.1,
-    measurementIntervalMs: 500,
-    fanRunOnMs: 30000,
-    uptimeMs: elapsedMs,
-    accessPointSsid: 'CoolingController',
-    accessPointIp: '',
-    stationSsid: '',
-    stationPasswordSet: false,
-    stationConnected: false,
-    stationStatus: 'disabled',
-    stationIp: '',
-    stationRssi: 0,
-    devMode: true,
-    demo: true
-  });
   const pageUrl = (ip) => ip ? 'http://' + ip + '/' : '--';
   const signalQuality = (rssi) => {
     if (rssi >= -55) return 'Excellent';
@@ -620,7 +991,6 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 
   document.addEventListener('DOMContentLoaded', () => {
     const demoBadge = document.getElementById('demoBadge');
-    const devBadge = document.getElementById('devBadge');
     const settingsForm = document.getElementById('settingsForm');
     const settingsOverlay = document.getElementById('settingsOverlay');
     const settingsOpen = document.getElementById('settingsOpen');
@@ -635,6 +1005,10 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     const hiddenNetworkInput = document.getElementById('hiddenNetworkInput');
     const forgetStationNetworkInput = document.getElementById('forgetStationNetworkInput');
     const forgetStationNetwork = document.getElementById('forgetStationNetwork');
+    const chartCanvas = document.getElementById('temperatureChart');
+    const chartResetZoom = document.getElementById('chartResetZoom');
+    const chartDownloadPng = document.getElementById('chartDownloadPng');
+    const chartDownloadCsv = document.getElementById('chartDownloadCsv');
     let settingsDirty = false;
     let networkScanStartedAt = 0;
     let currentSavedStationSsid = '';
@@ -788,6 +1162,15 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     settingsOpen.addEventListener('click', openSettings);
     settingsClose.addEventListener('click', closeSettings);
     scanNetworks.addEventListener('click', () => loadNetworks(false));
+    chartResetZoom.disabled = true;
+    chartResetZoom.textContent = 'Full range';
+    chartResetZoom.addEventListener('click', (event) => {
+      resetChartZoom();
+      event.currentTarget.blur();
+    });
+    chartDownloadPng.addEventListener('click', downloadPng);
+    chartDownloadCsv.addEventListener('click', downloadCsv);
+    attachChartInteractions(chartCanvas);
     toggleStationPassword.addEventListener('click', () => {
       const showing = stationPasswordInput.type === 'text';
       stationPasswordInput.type = showing ? 'password' : 'text';
@@ -825,24 +1208,23 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
         data.demo = false;
         return data;
       } catch (error) {
-        const devState = readStoredDevState();
-        return devState.enabled ? mockFromDevState(devState, Date.now() - startedAt) : mockStatus();
+        return fallbackStatus();
       }
     }
     async function refresh() {
       const data = await loadStatus();
       addChartSample(data);
       demoBadge.classList.toggle('hidden', !data.demo);
-      devBadge.classList.toggle('hidden', !data.devMode);
-      setText('temperature', data.hasTemperature ? data.temperatureC.toFixed(1) + ' C' : '--');
+      const filteredTemperature = Number(data.filteredTemperatureC ?? data.temperatureC);
+      setText('temperature', data.hasTemperature && !data.sensorDisconnected ? formatTemperature(filteredTemperature) : '-- °C');
       const sensor = document.getElementById('sensor');
-      sensor.textContent = data.sensorDisconnected ? 'ERROR' : 'OK';
-      sensor.className = 'value small ' + (data.sensorDisconnected ? 'bad' : 'ok');
+      sensor.textContent = data.sensorDisconnected || !data.hasTemperature ? 'UNAVAILABLE' : 'OK';
+      sensor.className = 'value small ' + (data.sensorDisconnected || !data.hasTemperature ? 'bad' : 'ok');
       setState('peltier', data.peltierRunning);
       setState('fan', data.fanRunning);
       setText('runon', data.fanRunOnActive ? Math.ceil(data.fanRunOnRemainingMs / 1000) + ' s' : 'OFF');
       setText('count', data.updateCount);
-      setText('target', data.targetC.toFixed(1) + ' C / hys ' + data.hysteresisC.toFixed(1));
+      setText('target', formatTemperature(data.targetC) + ' / hys ' + data.hysteresisC.toFixed(1) + ' °C');
       setText('uptime', Math.floor(data.uptimeMs / 1000) + ' s');
       setText('wifi', data.stationSsid ? (data.stationConnected ? data.stationIp : (data.stationStatus || 'Disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
       renderNetworkStatus(data);
@@ -902,392 +1284,8 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 </html>
 
 )dashboard_html";
-
-// Generated by tools/embed_dashboard.py from web/dev.html.
-const char kDevHtml[] PROGMEM = R"dev_html(
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Cooling Controller Dev</title>
-  <style>
-:root {
-  color-scheme: light;
-  font-family: system-ui, sans-serif;
-  --bg: #f5f7f8;
-  --text: #172126;
-  --muted: #68787f;
-  --card: #ffffff;
-  --border: #dce4e7;
-  --ok: #11773d;
-  --bad: #bf3030;
-  --demo-bg: #fff2bd;
-  --demo-text: #6b4b00;
-  --button: #e7eef1;
-  --button-text: #172126;
-  --primary: #176b4d;
-  --chart-grid: #d8e1e4;
-  --chart-primary: #0f7a5a;
-  --chart-secondary: #b15f1b;
-  --input: #ffffff;
-  --overlay: rgba(12, 18, 20, 0.42);
-  --shadow: 0 18px 60px rgba(21, 32, 36, 0.18);
-}
-
-[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #101417;
-  --text: #eef4f2;
-  --muted: #95a3a0;
-  --card: #182024;
-  --border: #2b3638;
-  --ok: #65d38a;
-  --bad: #ff7474;
-  --demo-bg: #4a3610;
-  --demo-text: #ffd979;
-  --button: #283236;
-  --button-text: #eef4f2;
-  --chart-grid: #2e3b3e;
-  --chart-primary: #5ccca1;
-  --chart-secondary: #f0a45f;
-  --input: #11181b;
-  --overlay: rgba(0, 0, 0, 0.58);
-  --shadow: 0 18px 60px rgba(0, 0, 0, 0.36);
-}
-
-body { margin: 0; background: var(--bg); color: var(--text); }
-main { max-width: 860px; margin: 0 auto; padding: 22px; }
-.narrow { max-width: 760px; }
-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
-h1 { margin: 0; font-size: 26px; font-weight: 700; }
-h2 { margin: 0; font-size: 18px; }
-button,
-a.button,
-.toolbar a {
-  border: 0;
-  border-radius: 8px;
-  padding: 9px 12px;
-  background: var(--button);
-  color: var(--button-text);
-  font: inherit;
-  font-size: 14px;
-  text-decoration: none;
-}
-button.primary { background: var(--primary); color: #ffffff; }
-.subtle { opacity: 0.72; }
-.danger { color: var(--bad); }
-.actions,
-.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.badge { border-radius: 999px; padding: 6px 9px; background: var(--demo-bg); color: var(--demo-text); font-size: 12px; font-weight: 700; text-transform: uppercase; }
-.hidden { display: none; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
-.grid.wide { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
-.card { border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--card); }
-.label { color: var(--muted); font-size: 13px; }
-.value { margin-top: 8px; font-size: 28px; font-weight: 700; }
-.small { font-size: 18px; }
-.dev-value { font-size: 22px; }
-.ok { color: var(--ok); }
-.bad { color: var(--bad); }
-.chart-panel { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--card); }
-.chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.chart-head h2 { margin-bottom: 4px; }
-.chart-legend { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; min-height: 22px; }
-.legend-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
-.legend-swatch { width: 22px; height: 3px; border-radius: 999px; background: currentColor; }
-.chart-wrap { position: relative; width: 100%; height: 260px; }
-.chart-wrap canvas { display: block; width: 100%; height: 100%; }
-.chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; pointer-events: none; }
-.chart-empty.hidden { display: none; }
-.panel { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-items: end; }
-input,
-select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px; background: var(--input); color: var(--text); font: inherit; }
-.check { display: flex; gap: 8px; align-items: center; min-height: 38px; }
-.check input { width: auto; margin: 0; }
-.settings-overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; padding: 18px; background: var(--overlay); z-index: 10; }
-.settings-overlay.open { display: flex; }
-.settings-dialog { width: min(620px, 100%); max-height: calc(100vh - 36px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; background: var(--card); box-shadow: var(--shadow); }
-.settings-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
-#settingsForm { padding: 16px; gap: 16px; }
-.settings-section { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); }
-.settings-section:first-child { padding-top: 0; border-top: 0; }
-.section-title { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 13px; font-weight: 700; text-transform: uppercase; }
-.android-network { grid-column: 1 / -1; display: grid; gap: 10px; }
-.internet-status { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 14px; align-items: center; min-height: 56px; border-bottom: 1px solid var(--border); padding: 4px 2px 12px; }
-.internet-main { min-width: 0; display: grid; gap: 2px; }
-.internet-main strong { overflow-wrap: anywhere; font-size: 16px; font-weight: 650; }
-.internet-main span { overflow-wrap: anywhere; color: var(--muted); font-size: 13px; }
-.network-status { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-.status-line { min-width: 0; padding: 8px 0; border-bottom: 1px solid var(--border); }
-.status-line strong { display: block; color: var(--muted); font-size: 12px; font-weight: 650; }
-.status-line span { display: block; margin-top: 3px; overflow-wrap: anywhere; font-size: 13px; }
-.scan-panel { grid-column: 1 / -1; display: grid; gap: 6px; padding-top: 8px; }
-.scan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 42px; }
-.scan-head span { display: grid; gap: 2px; }
-.scan-head strong { font-size: 15px; font-weight: 650; }
-.scan-head small { color: var(--muted); font-size: 12px; }
-.network-list { display: grid; }
-.network-item { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 14px; align-items: center; width: 100%; min-height: 58px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 8px 2px; background: transparent; color: var(--text); text-align: left; }
-.network-item.selected { color: var(--primary); }
-.network-main strong,
-.network-main span { overflow-wrap: anywhere; }
-.network-main { min-width: 0; display: grid; gap: 2px; }
-.network-main strong { font-size: 15px; font-weight: 600; }
-.network-main span { color: var(--muted); font-size: 12px; }
-.network-trailing { min-width: 42px; color: var(--muted); font-size: 12px; text-align: right; }
-.network-item.selected .network-trailing { color: var(--primary); font-weight: 650; }
-.network-icon { position: relative; display: block; width: 26px; height: 24px; color: var(--muted); }
-.network-icon i { position: absolute; bottom: 2px; width: 5px; border-radius: 999px; background: currentColor; opacity: 0.35; }
-.network-icon i:nth-child(1) { left: 3px; height: 7px; }
-.network-icon i:nth-child(2) { left: 10px; height: 13px; }
-.network-icon i:nth-child(3) { left: 17px; height: 19px; }
-.network-icon.signal-1 i:nth-child(1),
-.network-icon.signal-2 i:nth-child(-n + 2),
-.network-icon.signal-3 i { opacity: 1; }
-.network-item.selected .network-icon { color: var(--primary); }
-.lock-dot { display: inline-block; width: 7px; height: 7px; margin-left: 4px; border-radius: 999px; background: currentColor; opacity: 0.72; vertical-align: 1px; }
-.network-details { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding-top: 12px; }
-.network-field { display: grid; gap: 6px; min-width: 0; padding: 0; color: var(--muted); font-size: 12px; font-weight: 650; }
-.network-field input { margin: 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; padding: 3px 0 8px; background: transparent; color: var(--text); font-size: 15px; font-weight: 500; outline: 0; }
-.network-field input:focus { border-color: var(--primary); }
-.network-field input::placeholder { color: var(--muted); opacity: 0.86; }
-.network-field > span:last-child { color: var(--muted); font-size: 11px; font-weight: 400; }
-.password-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
-.password-control button { min-width: 44px; padding: 4px 0 8px; border-radius: 0; color: var(--primary); background: transparent; font-size: 12px; font-weight: 650; }
-.forget-network { justify-self: start; padding: 0; background: transparent; color: var(--bad); font-size: 13px; font-weight: 650; }
-.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; color: var(--text); }
-.switch-row strong { display: block; font-size: 14px; font-weight: 600; }
-.switch-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
-.switch { position: relative; width: 48px; height: 28px; flex: 0 0 auto; }
-.switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; }
-.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--border); }
-.switch span::after { content: ""; position: absolute; top: 4px; left: 4px; width: 20px; height: 20px; border-radius: 50%; background: var(--card); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22); transition: transform 140ms ease; }
-.switch input:checked + span { background: var(--primary); }
-.switch input:checked + span::after { transform: translateX(20px); }
-.form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; grid-column: 1 / -1; margin-top: 4px; }
-#saveState { color: var(--muted); font-size: 13px; }
-
-@media (max-width: 560px) {
-  header { align-items: flex-start; flex-direction: column; }
-  .actions,
-  .toolbar { justify-content: flex-start; }
-  .settings-overlay { align-items: flex-end; padding: 0; }
-  .settings-dialog { width: 100%; max-height: 88vh; border-right: 0; border-bottom: 0; border-left: 0; }
-}
-
-  </style>
-</head>
-<body>
-  <main>
-    <header>
-      <h1>Dev panel</h1>
-      <div class="toolbar">
-        <a href="/">Dashboard</a>
-        <button id="refreshBtn" type="button">Refresh</button>
-        <button id="themeToggle" type="button">Dark theme</button>
-      </div>
-    </header>
-
-    <section class="grid wide">
-      <div class="card"><div class="label">Simulation</div><div id="mode" class="value dev-value">--</div></div>
-      <div class="card"><div class="label">Temperature</div><div id="temperature" class="value dev-value">--</div></div>
-      <div class="card"><div class="label">Peltier</div><div id="peltier" class="value dev-value">--</div></div>
-      <div class="card"><div class="label">Fan</div><div id="fan" class="value dev-value">--</div></div>
-    </section>
-
-    <section class="panel">
-      <form id="devForm">
-        <label class="check"><input id="enabledInput" name="enabled" type="checkbox"> Enable status simulation</label>
-        <label class="label">Temperature, C<input id="temperatureInput" name="temperatureC" type="number" min="-127" max="125" step="0.1"></label>
-        <label class="check"><input id="hasTemperatureInput" name="hasTemperature" type="checkbox"> Has temperature</label>
-        <label class="check"><input id="sensorDisconnectedInput" name="sensorDisconnected" type="checkbox"> Sensor disconnected</label>
-        <label class="check"><input id="peltierInput" name="peltierRunning" type="checkbox"> Peltier ON</label>
-        <label class="check"><input id="fanInput" name="fanRunning" type="checkbox"> Fan ON</label>
-        <label class="check"><input id="runOnInput" name="fanRunOnActive" type="checkbox"> Fan run-on active</label>
-        <label class="label">Run-on remaining, ms<input id="remainingInput" name="fanRunOnRemainingMs" type="number" min="0" max="600000" step="1000"></label>
-        <label class="label">Updates<input id="updatesInput" name="updateCount" type="number" min="0" max="999999" step="1"></label>
-        <div class="toolbar">
-          <button class="primary" type="submit">Apply</button>
-          <button id="resetBtn" type="button">Disable simulation</button>
-          <span id="saveState"></span>
-        </div>
-      </form>
-    </section>
-  </main>
-  <script>
-(function () {
-  const storageKeys = {
-    theme: 'cooling-dashboard.theme',
-    legacyTheme: 'theme',
-    devState: 'cooling-dashboard.devState'
-  };
-  const defaultDevState = {
-    ok: true,
-    enabled: false,
-    temperatureC: 5.0,
-    hasTemperature: true,
-    sensorDisconnected: false,
-    updateCount: 0,
-    peltierRunning: false,
-    fanRunning: false,
-    fanRunOnActive: false,
-    fanRunOnRemainingMs: 0
-  };
-  const setText = (id, text) => document.getElementById(id).textContent = text;
-  const readStoredDevState = () => {
-    try {
-      return { ...defaultDevState, ...JSON.parse(localStorage.getItem(storageKeys.devState) || '{}') };
-    } catch (error) {
-      return { ...defaultDevState };
-    }
-  };
-  const storeDevState = (data) => {
-    localStorage.setItem(storageKeys.devState, JSON.stringify({ ...defaultDevState, ...data }));
-  };
-  const initTheme = () => {
-    const themeToggle = document.getElementById('themeToggle');
-    if (!themeToggle) return;
-    const applyTheme = (theme) => {
-      document.documentElement.dataset.theme = theme;
-      themeToggle.textContent = theme === 'dark' ? 'Light theme' : 'Dark theme';
-      localStorage.setItem(storageKeys.theme, theme);
-      localStorage.setItem(storageKeys.legacyTheme, theme);
-    };
-    applyTheme(localStorage.getItem(storageKeys.theme) || localStorage.getItem(storageKeys.legacyTheme) || 'light');
-    themeToggle.addEventListener('click', () => {
-      applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
-    });
-  };
-  window.CoolingWeb = {
-    storageKeys,
-    defaultDevState,
-    initTheme,
-    readStoredDevState,
-    storeDevState,
-    setText
-  };
-  document.addEventListener('DOMContentLoaded', initTheme);
-}());
-
-  </script>
-  <script>
-(function () {
-  const { readStoredDevState, storeDevState, setText } = window.CoolingWeb;
-  const ids = {
-    enabled: 'enabledInput',
-    temperatureC: 'temperatureInput',
-    hasTemperature: 'hasTemperatureInput',
-    sensorDisconnected: 'sensorDisconnectedInput',
-    peltierRunning: 'peltierInput',
-    fanRunning: 'fanInput',
-    fanRunOnActive: 'runOnInput',
-    fanRunOnRemainingMs: 'remainingInput',
-    updateCount: 'updatesInput'
-  };
-  const setChecked = (id, value) => document.getElementById(id).checked = Boolean(value);
-  const setValue = (id, value) => document.getElementById(id).value = value;
-
-  document.addEventListener('DOMContentLoaded', () => {
-    const saveState = document.getElementById('saveState');
-    const setSaveState = (text, isError = false) => {
-      saveState.textContent = text;
-      saveState.className = isError ? 'danger' : '';
-    };
-    const formData = () => {
-      const body = new URLSearchParams();
-      body.set('enabled', document.getElementById(ids.enabled).checked ? '1' : '0');
-      body.set('temperatureC', document.getElementById(ids.temperatureC).value || '0');
-      body.set('hasTemperature', document.getElementById(ids.hasTemperature).checked ? '1' : '0');
-      body.set('sensorDisconnected', document.getElementById(ids.sensorDisconnected).checked ? '1' : '0');
-      body.set('peltierRunning', document.getElementById(ids.peltierRunning).checked ? '1' : '0');
-      body.set('fanRunning', document.getElementById(ids.fanRunning).checked ? '1' : '0');
-      body.set('fanRunOnActive', document.getElementById(ids.fanRunOnActive).checked ? '1' : '0');
-      body.set('fanRunOnRemainingMs', document.getElementById(ids.fanRunOnRemainingMs).value || '0');
-      body.set('updateCount', document.getElementById(ids.updateCount).value || '0');
-      return body;
-    };
-    const applyState = (data) => {
-      storeDevState(data);
-      setChecked(ids.enabled, data.enabled);
-      setValue(ids.temperatureC, Number(data.temperatureC).toFixed(1));
-      setChecked(ids.hasTemperature, data.hasTemperature);
-      setChecked(ids.sensorDisconnected, data.sensorDisconnected);
-      setChecked(ids.peltierRunning, data.peltierRunning);
-      setChecked(ids.fanRunning, data.fanRunning);
-      setChecked(ids.fanRunOnActive, data.fanRunOnActive);
-      setValue(ids.fanRunOnRemainingMs, data.fanRunOnRemainingMs);
-      setValue(ids.updateCount, data.updateCount);
-      setText('mode', data.enabled ? 'ON' : 'OFF');
-      setText('temperature', data.hasTemperature ? Number(data.temperatureC).toFixed(1) + ' C' : '--');
-      setText('peltier', data.peltierRunning ? 'ON' : 'OFF');
-      setText('fan', data.fanRunning ? 'ON' : 'OFF');
-    };
-    async function loadDev() {
-      try {
-        const res = await fetch('/api/dev', { cache: 'no-store' });
-        if (!res.ok) throw new Error('dev state unavailable');
-        applyState(await res.json());
-      } catch (error) {
-        applyState(readStoredDevState());
-        setSaveState('Local state');
-      }
-    }
-    async function saveDev(body) {
-      setSaveState('Saving...');
-      const localState = {
-        ok: true,
-        enabled: body.get('enabled') === '1',
-        temperatureC: Number(body.get('temperatureC')),
-        hasTemperature: body.get('hasTemperature') === '1',
-        sensorDisconnected: body.get('sensorDisconnected') === '1',
-        updateCount: Number(body.get('updateCount')),
-        peltierRunning: body.get('peltierRunning') === '1',
-        fanRunning: body.get('fanRunning') === '1',
-        fanRunOnActive: body.get('fanRunOnActive') === '1',
-        fanRunOnRemainingMs: Number(body.get('fanRunOnRemainingMs'))
-      };
-      try {
-        const res = await fetch('/api/dev', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body
-        });
-        if (!res.ok) throw new Error('save failed');
-        applyState(await res.json());
-        setSaveState('Applied');
-      } catch (error) {
-        applyState(localState);
-        setSaveState('Applied locally');
-      }
-    }
-    document.getElementById('devForm').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      try {
-        await saveDev(formData());
-      } catch (error) {
-        setSaveState('Apply failed', true);
-      }
-    });
-    document.getElementById('resetBtn').addEventListener('click', async () => {
-      const body = formData();
-      body.set('enabled', '0');
-      await saveDev(body);
-    });
-    document.getElementById('refreshBtn').addEventListener('click', loadDev);
-    loadDev();
-  });
-}());
-
-  </script>
-</body>
-</html>
-
-)dev_html";
 inline const char *webPageForPath(const String &path)
 {
   if (path == "/" || path == "/dashboard.html") { return kIndexHtml; }
-  if (path == "/dev" || path == "/dev.html") { return kDevHtml; }
   return nullptr;
 }

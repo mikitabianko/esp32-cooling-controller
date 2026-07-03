@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <cstdlib>
 #include <cstring>
+#include <cmath>
 #include "config/Config.h"
 #include "debug/DebugLog.h"
 #include "domain/TemperatureLogic.h"
@@ -118,8 +119,7 @@ IPAddress WebDashboard::begin()
   server_.on("/", [this]() { handlePage(); });
   server_.on("/api/status", [this]() { handleStatus(); });
   server_.on("/api/history", HTTP_GET, [this]() { handleHistory(); });
-  server_.on("/api/dev", HTTP_GET, [this]() { handleGetDevState(); });
-  server_.on("/api/dev", HTTP_POST, [this]() { handleSaveDevState(); });
+  server_.on("/api/history.csv", HTTP_GET, [this]() { handleHistoryCsv(); });
   server_.on("/api/settings", HTTP_GET, [this]() { handleGetSettings(); });
   server_.on("/api/settings", HTTP_POST, [this]() { handleSaveSettings(); });
   server_.on("/api/networks", HTTP_GET, [this]() { handleNetworks(); });
@@ -172,6 +172,15 @@ void WebDashboard::setSnapshot(const DashboardSnapshot &snapshot)
   snapshot_.settings = settings_;
   snapshot_.sensorDisconnected =
       snapshot_.hasTemperature && isSensorDisconnected(snapshot_.temperatureC);
+  if (snapshot_.hasTemperature && !snapshot_.sensorDisconnected) {
+    snapshot_.temperatureC = hasLiveFilteredTemperature_
+                                 ? lowPassFilter(liveFilteredTemperatureC_,
+                                                 snapshot_.temperatureC,
+                                                 0.65F)
+                                 : snapshot_.temperatureC;
+    liveFilteredTemperatureC_ = snapshot_.temperatureC;
+    hasLiveFilteredTemperature_ = true;
+  }
   recordTemperatureHistory(snapshot_);
 }
 
@@ -229,23 +238,9 @@ void WebDashboard::handleHistory()
   server_.send(200, "application/json", historyJson());
 }
 
-void WebDashboard::handleGetDevState()
+void WebDashboard::handleHistoryCsv()
 {
-  server_.send(200, "application/json", devJson());
-}
-
-void WebDashboard::handleSaveDevState()
-{
-  DevDashboardState state;
-  if (!readDevArgs(state)) {
-    server_.send(400,
-                 "application/json",
-                 "{\"ok\":false,\"error\":\"invalid dev state\"}");
-    return;
-  }
-
-  devState_ = state;
-  server_.send(200, "application/json", devJson());
+  server_.send(200, "text/csv; charset=utf-8", historyCsv());
 }
 
 void WebDashboard::handleGetSettings()
@@ -263,10 +258,14 @@ void WebDashboard::handleSaveSettings()
     return;
   }
 
+  const AppSettings previousSettings = settings_;
   const String previousSsid = settings_.stationSsid;
   const String previousPassword = settings_.stationPassword;
   settings_ = sanitizedSettings(settings);
   snapshot_.settings = settings_;
+  const bool targetChanged =
+      std::fabs(settings_.targetTemperatureC -
+                previousSettings.targetTemperatureC) >= 0.05F;
   const bool stationChanged = settings_.stationSsid != previousSsid ||
                               settings_.stationPassword != previousPassword;
   const bool stationForgotten =
@@ -291,6 +290,9 @@ void WebDashboard::handleSaveSettings()
       connectStation();
     }
   }
+  if (targetChanged) {
+    recordTargetChange(millis());
+  }
   server_.send(200, "application/json", settingsJson());
 }
 
@@ -311,11 +313,13 @@ void WebDashboard::handleNotFound()
 
 String WebDashboard::statusJson() const
 {
-  const DashboardSnapshot snapshot = effectiveSnapshot();
+  const DashboardSnapshot snapshot = snapshot_;
   String json;
   json.reserve(560);
   json += "{";
   json += "\"temperatureC\":";
+  json += snapshot.temperatureC;
+  json += ",\"filteredTemperatureC\":";
   json += snapshot.temperatureC;
   json += ",\"hasTemperature\":";
   json += boolText(snapshot.hasTemperature);
@@ -341,8 +345,6 @@ String WebDashboard::statusJson() const
   json += settings_.fanRunOnMs;
   json += ",\"uptimeMs\":";
   json += snapshot.uptimeMs;
-  json += ",\"devMode\":";
-  json += boolText(devState_.enabled);
   json += ",\"accessPointSsid\":";
   json += jsonString(Config::Network::AccessPointSsid);
   json += ",\"accessPointIp\":";
@@ -367,14 +369,19 @@ String WebDashboard::statusJson() const
 String WebDashboard::historyJson() const
 {
   String json;
-  json.reserve(220 + temperatureHistoryCount_ * 22);
+  json.reserve(430 + temperatureHistoryCount_ * 42);
   json += "{";
   json += "\"ok\":true";
-  json += ",\"historyMs\":";
-  json += kTemperatureHistoryCapacity * kTemperatureHistoryMinIntervalMs;
-  json += ",\"sampleIntervalMs\":";
-  json += kTemperatureHistoryMinIntervalMs;
-  json += ",\"series\":[{\"id\":\"probe1\",\"label\":\"Probe 1\",\"unit\":\"C\",\"points\":[";
+  json += ",\"capacity\":";
+  json += kTemperatureHistoryCapacity;
+  json += ",\"keepaliveMs\":";
+  json += kTemperatureHistoryKeepaliveMs;
+  json += ",\"changeThresholdCx10\":";
+  json += kTemperatureHistoryChangeCx10;
+  json += ",\"disconnectedFlag\":";
+  json += kTemperatureHistoryDisconnectedFlag;
+  json += ",\"fields\":[\"uptimeMs\",\"temperatureCx10\",\"targetCx10\",\"flags\",\"sensorValid\",\"sensorDisconnected\"]";
+  json += ",\"series\":[{\"id\":\"probe1\",\"label\":\"Filtered temperature\",\"unit\":\"C\",\"points\":[";
   for (size_t i = 0; i < temperatureHistoryCount_; ++i) {
     if (i > 0) {
       json += ",";
@@ -382,16 +389,55 @@ String WebDashboard::historyJson() const
     const size_t index =
         (temperatureHistoryStart_ + i) % kTemperatureHistoryCapacity;
     const TemperatureHistorySample &sample = temperatureHistory_[index];
+    const bool disconnected =
+        (sample.flags & kTemperatureHistoryDisconnectedFlag) != 0;
     json += "[";
     json += sample.uptimeMs;
     json += ",";
     json += sample.temperatureCx10;
     json += ",";
+    json += sample.targetCx10;
+    json += ",";
     json += sample.flags;
+    json += ",";
+    json += disconnected ? 0 : 1;
+    json += ",";
+    json += disconnected ? 1 : 0;
     json += "]";
   }
   json += "]}]}";
   return json;
+}
+
+String WebDashboard::historyCsv() const
+{
+  String csv;
+  csv.reserve(96 + temperatureHistoryCount_ * 44);
+  csv += "timestamp_ms,filtered_temperature_c,target_temperature_c,sensor_status,sensor_valid,sensor_disconnected,flags\n";
+  for (size_t i = 0; i < temperatureHistoryCount_; ++i) {
+    const size_t index =
+        (temperatureHistoryStart_ + i) % kTemperatureHistoryCapacity;
+    const TemperatureHistorySample &sample = temperatureHistory_[index];
+    const bool disconnected =
+        (sample.flags & kTemperatureHistoryDisconnectedFlag) != 0;
+    csv += sample.uptimeMs;
+    csv += ",";
+    if (!disconnected) {
+      csv += String(static_cast<float>(sample.temperatureCx10) / 10.0F, 1);
+    }
+    csv += ",";
+    csv += String(static_cast<float>(sample.targetCx10) / 10.0F, 1);
+    csv += ",";
+    csv += disconnected ? "unavailable" : "ok";
+    csv += ",";
+    csv += disconnected ? "0" : "1";
+    csv += ",";
+    csv += disconnected ? "1" : "0";
+    csv += ",";
+    csv += sample.flags;
+    csv += "\n";
+  }
+  return csv;
 }
 
 String WebDashboard::settingsJson() const
@@ -453,33 +499,6 @@ String WebDashboard::networksJson()
     return lastNetworkScanJson_;
   }
   return networkScanJson("failed", false, WIFI_SCAN_FAILED);
-}
-
-String WebDashboard::devJson() const
-{
-  String json;
-  json.reserve(260);
-  json += "{\"ok\":true";
-  json += ",\"enabled\":";
-  json += boolText(devState_.enabled);
-  json += ",\"temperatureC\":";
-  json += devState_.temperatureC;
-  json += ",\"hasTemperature\":";
-  json += boolText(devState_.hasTemperature);
-  json += ",\"sensorDisconnected\":";
-  json += boolText(devState_.sensorDisconnected);
-  json += ",\"updateCount\":";
-  json += devState_.updateCount;
-  json += ",\"peltierRunning\":";
-  json += boolText(devState_.coolingState.peltierRunning);
-  json += ",\"fanRunning\":";
-  json += boolText(devState_.coolingState.fanRunning);
-  json += ",\"fanRunOnActive\":";
-  json += boolText(devState_.coolingState.fanRunOnActive);
-  json += ",\"fanRunOnRemainingMs\":";
-  json += devState_.coolingState.fanRunOnRemainingMs;
-  json += "}";
-  return json;
 }
 
 String WebDashboard::jsonString(const String &value) const
@@ -971,42 +990,6 @@ bool WebDashboard::readSettingsArgs(AppSettings &settings)
   return true;
 }
 
-bool WebDashboard::readDevArgs(DevDashboardState &state)
-{
-  bool enabled = false;
-  float temperatureC = 0.0F;
-  bool hasTemperature = false;
-  bool sensorDisconnected = false;
-  bool peltierRunning = false;
-  bool fanRunning = false;
-  bool fanRunOnActive = false;
-  unsigned long fanRunOnRemainingMs = 0;
-  int updateCount = 0;
-
-  if (!readBoolArg("enabled", enabled) ||
-      !readFloatArg("temperatureC", temperatureC) ||
-      !readBoolArg("hasTemperature", hasTemperature) ||
-      !readBoolArg("sensorDisconnected", sensorDisconnected) ||
-      !readBoolArg("peltierRunning", peltierRunning) ||
-      !readBoolArg("fanRunning", fanRunning) ||
-      !readBoolArg("fanRunOnActive", fanRunOnActive) ||
-      !readUnsignedLongArg("fanRunOnRemainingMs", fanRunOnRemainingMs) ||
-      !readIntArg("updateCount", updateCount)) {
-    return false;
-  }
-
-  state.enabled = enabled;
-  state.temperatureC = temperatureC;
-  state.hasTemperature = hasTemperature;
-  state.sensorDisconnected = sensorDisconnected;
-  state.updateCount = updateCount < 0 ? 0 : updateCount;
-  state.coolingState.peltierRunning = peltierRunning;
-  state.coolingState.fanRunning = fanRunning;
-  state.coolingState.fanRunOnActive = fanRunOnActive;
-  state.coolingState.fanRunOnRemainingMs = fanRunOnRemainingMs;
-  return true;
-}
-
 bool WebDashboard::readBoolArg(const char *name, bool &value)
 {
   if (!server_.hasArg(name)) {
@@ -1088,28 +1071,71 @@ bool WebDashboard::readUnsignedLongArg(const char *name,
   return end != text.c_str() && *end == '\0';
 }
 
-void WebDashboard::recordTemperatureHistory(const DashboardSnapshot &snapshot)
+void WebDashboard::recordTargetChange(unsigned long uptimeMs)
 {
-  if (!snapshot.hasTemperature) {
-    return;
+  DashboardSnapshot snapshot = snapshot_;
+  snapshot.uptimeMs = uptimeMs;
+  snapshot.settings = settings_;
+  recordTemperatureHistory(snapshot, true);
+}
+
+void WebDashboard::recordTemperatureHistory(const DashboardSnapshot &snapshot,
+                                            bool forceTargetChange)
+{
+  const bool disconnected =
+      !snapshot.hasTemperature || snapshot.sensorDisconnected;
+  float storageTemperature = storedFilteredTemperatureC_;
+  bool hasStorageTemperature = hasStoredFilteredTemperature_;
+
+  if (!disconnected) {
+    storageTemperature = hasStoredFilteredTemperature_
+                             ? lowPassFilter(storedFilteredTemperatureC_,
+                                             snapshot.temperatureC,
+                                             0.18F)
+                             : snapshot.temperatureC;
+    storedFilteredTemperatureC_ = storageTemperature;
+    hasStoredFilteredTemperature_ = true;
+    hasStorageTemperature = true;
   }
-  if (hasTemperatureHistorySample_ &&
-      snapshot.uptimeMs - lastTemperatureHistorySampleMs_ <
-          kTemperatureHistoryMinIntervalMs) {
+
+  const int16_t temperatureCx10 =
+      hasStorageTemperature ? temperatureToCx10(storageTemperature) : 0;
+  const int16_t targetCx10 =
+      temperatureToCx10(snapshot.settings.targetTemperatureC);
+  const bool firstPoint = !hasTemperatureHistorySample_;
+  const bool temperatureChanged =
+      !disconnected && (!hasTemperatureHistorySample_ ||
+                        std::abs(static_cast<int>(temperatureCx10) -
+                                 static_cast<int>(lastStoredTemperatureCx10_)) >=
+                            kTemperatureHistoryChangeCx10);
+  const bool targetChanged =
+      forceTargetChange ||
+      !hasTemperatureHistorySample_ ||
+      targetCx10 != lastStoredTargetCx10_;
+  const bool keepaliveDue =
+      hasTemperatureHistorySample_ &&
+      snapshot.uptimeMs - lastTemperatureHistorySampleMs_ >=
+          kTemperatureHistoryKeepaliveMs;
+  const bool sensorChanged =
+      !hasTemperatureHistorySample_ ||
+      disconnected != lastStoredSensorDisconnected_;
+
+  if (!firstPoint && !temperatureChanged && !targetChanged && !keepaliveDue &&
+      !sensorChanged) {
     return;
   }
 
-  const float scaledTemperature = snapshot.temperatureC * 10.0F;
-  const int16_t temperatureCx10 = static_cast<int16_t>(
-      scaledTemperature >= 0.0F ? scaledTemperature + 0.5F
-                                : scaledTemperature - 0.5F);
   TemperatureHistorySample sample;
   sample.uptimeMs = snapshot.uptimeMs;
-  sample.temperatureCx10 = temperatureCx10;
-  sample.flags = snapshot.sensorDisconnected
-                     ? kTemperatureHistoryDisconnectedFlag
-                     : 0U;
+  sample.temperatureCx10 = disconnected ? 0 : temperatureCx10;
+  sample.targetCx10 = targetCx10;
+  sample.flags = disconnected ? kTemperatureHistoryDisconnectedFlag : 0U;
+  appendTemperatureHistorySample(sample);
+}
 
+void WebDashboard::appendTemperatureHistorySample(
+    const TemperatureHistorySample &sample)
+{
   size_t index = 0;
   if (temperatureHistoryCount_ < kTemperatureHistoryCapacity) {
     index = (temperatureHistoryStart_ + temperatureHistoryCount_) %
@@ -1122,23 +1148,25 @@ void WebDashboard::recordTemperatureHistory(const DashboardSnapshot &snapshot)
   }
 
   temperatureHistory_[index] = sample;
-  lastTemperatureHistorySampleMs_ = snapshot.uptimeMs;
+  lastTemperatureHistorySampleMs_ = sample.uptimeMs;
+  lastStoredTemperatureCx10_ = sample.temperatureCx10;
+  lastStoredTargetCx10_ = sample.targetCx10;
+  lastStoredSensorDisconnected_ =
+      (sample.flags & kTemperatureHistoryDisconnectedFlag) != 0;
   hasTemperatureHistorySample_ = true;
 }
 
-DashboardSnapshot WebDashboard::effectiveSnapshot() const
+int16_t WebDashboard::temperatureToCx10(float temperatureC) const
 {
-  if (!devState_.enabled) {
-    return snapshot_;
-  }
+  const float scaledTemperature = temperatureC * 10.0F;
+  return static_cast<int16_t>(scaledTemperature >= 0.0F
+                                  ? scaledTemperature + 0.5F
+                                  : scaledTemperature - 0.5F);
+}
 
-  DashboardSnapshot snapshot;
-  snapshot.temperatureC = devState_.temperatureC;
-  snapshot.hasTemperature = devState_.hasTemperature;
-  snapshot.sensorDisconnected = devState_.sensorDisconnected;
-  snapshot.updateCount = devState_.updateCount;
-  snapshot.coolingState = devState_.coolingState;
-  snapshot.settings = settings_;
-  snapshot.uptimeMs = millis();
-  return snapshot;
+float WebDashboard::lowPassFilter(float previous,
+                                  float current,
+                                  float alpha) const
+{
+  return previous + (current - previous) * alpha;
 }

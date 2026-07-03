@@ -16,6 +16,9 @@
   --chart-grid: #d8e1e4;
   --chart-primary: #0f7a5a;
   --chart-secondary: #b15f1b;
+  --chart-target: #7b4db9;
+  --chart-disconnected: rgba(191, 48, 48, 0.16);
+  --chart-selection: rgba(23, 107, 77, 0.16);
   --input: #ffffff;
   --overlay: rgba(12, 18, 20, 0.42);
   --shadow: 0 18px 60px rgba(21, 32, 36, 0.18);
@@ -37,6 +40,9 @@
   --chart-grid: #2e3b3e;
   --chart-primary: #5ccca1;
   --chart-secondary: #f0a45f;
+  --chart-target: #c4a2ff;
+  --chart-disconnected: rgba(255, 116, 116, 0.18);
+  --chart-selection: rgba(92, 204, 161, 0.18);
   --input: #11181b;
   --overlay: rgba(0, 0, 0, 0.58);
   --shadow: 0 18px 60px rgba(0, 0, 0, 0.36);
@@ -61,6 +67,7 @@ a.button,
   text-decoration: none;
 }
 button.primary { background: var(--primary); color: #ffffff; }
+button:disabled { cursor: not-allowed; opacity: 0.48; }
 .subtle { opacity: 0.72; }
 .danger { color: var(--bad); }
 .actions,
@@ -73,17 +80,21 @@ button.primary { background: var(--primary); color: #ffffff; }
 .label { color: var(--muted); font-size: 13px; }
 .value { margin-top: 8px; font-size: 28px; font-weight: 700; }
 .small { font-size: 18px; }
-.dev-value { font-size: 22px; }
 .ok { color: var(--ok); }
 .bad { color: var(--bad); }
 .chart-panel { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--card); }
 .chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .chart-head h2 { margin-bottom: 4px; }
+.chart-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.chart-actions button { padding: 7px 9px; font-size: 12px; }
 .chart-legend { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; min-height: 22px; }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
 .legend-swatch { width: 22px; height: 3px; border-radius: 999px; background: currentColor; }
 .chart-wrap { position: relative; width: 100%; height: 260px; }
-.chart-wrap canvas { display: block; width: 100%; height: 100%; }
+.chart-wrap canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.chart-tooltip { position: absolute; z-index: 2; display: grid; gap: 2px; min-width: 138px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 9px; background: var(--card); box-shadow: var(--shadow); color: var(--text); font-size: 12px; pointer-events: none; }
+.chart-tooltip.hidden { display: none; }
+.chart-tooltip span { color: var(--muted); }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; pointer-events: none; }
 .chart-empty.hidden { display: none; }
 .panel { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
@@ -159,6 +170,10 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
   header { align-items: flex-start; flex-direction: column; }
   .actions,
   .toolbar { justify-content: flex-start; }
+  .chart-head { flex-direction: column; }
+  .chart-actions { justify-content: flex-start; }
+  .chart-legend { justify-content: flex-start; }
+  .chart-wrap { height: 300px; }
   .settings-overlay { align-items: flex-end; padding: 0; }
   .settings-dialog { width: 100%; max-height: 88vh; border-right: 0; border-bottom: 0; border-left: 0; }
 }

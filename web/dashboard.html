@@ -12,9 +12,7 @@
       <h1>Cooling Controller</h1>
       <div class="actions">
         <span id="demoBadge" class="badge hidden">Demo scene</span>
-        <span id="devBadge" class="badge hidden">Dev mode</span>
         <button id="settingsOpen" type="button">Settings</button>
-        <a class="button subtle" href="/dev">Dev</a>
         <button id="themeToggle" type="button">Dark theme</button>
       </div>
     </header>
@@ -33,12 +31,18 @@
       <div class="chart-head">
         <div>
           <h2 id="temperatureChartTitle">Temperature history</h2>
-          <div id="chartWindow" class="label">Last 30 min</div>
+          <div id="chartWindow" class="label">Startup to now</div>
         </div>
-        <div id="chartLegend" class="chart-legend"></div>
+        <div class="chart-actions">
+          <div id="chartLegend" class="chart-legend"></div>
+          <button id="chartResetZoom" type="button">Reset zoom</button>
+          <button id="chartDownloadPng" type="button">Download PNG</button>
+          <button id="chartDownloadCsv" type="button">Download CSV</button>
+        </div>
       </div>
       <div class="chart-wrap">
         <canvas id="temperatureChart" height="260" aria-label="Temperature over time"></canvas>
+        <div id="chartTooltip" class="chart-tooltip hidden"></div>
         <div id="chartEmpty" class="chart-empty">Waiting for measurements</div>
       </div>
     </section>
@@ -52,8 +56,8 @@
       <form id="settingsForm">
         <section class="settings-section">
           <h3 class="section-title">Cooling</h3>
-          <label class="label">Target, C<input id="targetInput" name="targetC" type="number" min="-20" max="40" step="0.1" required></label>
-          <label class="label">Hysteresis, C<input id="hysteresisInput" name="hysteresisC" type="number" min="0.1" max="10" step="0.1" required></label>
+          <label class="label">Target, °C<input id="targetInput" name="targetC" type="number" min="-20" max="40" step="0.1" required></label>
+          <label class="label">Hysteresis, °C<input id="hysteresisInput" name="hysteresisC" type="number" min="0.1" max="10" step="0.1" required></label>
           <label class="label">Measurement, ms<input id="measurementInput" name="measurementIntervalMs" type="number" min="250" max="60000" step="50" required></label>
           <label class="label">Fan run-on, ms<input id="fanRunOnInput" name="fanRunOnMs" type="number" min="0" max="600000" step="1000" required></label>
         </section>
