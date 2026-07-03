@@ -84,7 +84,9 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .bad { color: var(--bad); }
 .chart-panel { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--card); }
 .chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.chart-head > div:first-child { min-width: 0; }
 .chart-head h2 { margin-bottom: 4px; }
+#chartWindow { display: block; min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 16px; font-variant-numeric: tabular-nums; }
 .chart-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .chart-actions button { padding: 7px 9px; font-size: 12px; }
 .chart-legend { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; min-height: 22px; }
@@ -97,6 +99,7 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .chart-tooltip span { color: var(--muted); }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; pointer-events: none; }
 .chart-empty.hidden { display: none; }
+.chart-touch-hint { display: none; margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.35; }
 .panel { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
 form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-items: end; }
 input,
@@ -167,13 +170,20 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 #saveState { color: var(--muted); font-size: 13px; }
 
 @media (max-width: 560px) {
+  main { padding: 14px; }
   header { align-items: flex-start; flex-direction: column; }
   .actions,
   .toolbar { justify-content: flex-start; }
+  .chart-panel { margin-right: -8px; margin-left: -8px; padding: 12px; }
   .chart-head { flex-direction: column; }
-  .chart-actions { justify-content: flex-start; }
-  .chart-legend { justify-content: flex-start; }
-  .chart-wrap { height: 300px; }
+  .chart-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 6px; }
+  .chart-actions button { min-height: 42px; padding: 8px 6px; font-size: 11px; line-height: 1.15; }
+  .chart-legend { grid-column: 1 / -1; justify-content: flex-start; gap: 8px 10px; }
+  .legend-item { gap: 5px; font-size: 11px; }
+  .legend-swatch { width: 18px; }
+  .chart-wrap { height: min(62vh, 360px); min-height: 310px; }
+  .chart-tooltip { max-width: calc(100% - 24px); min-width: 132px; }
+  .chart-touch-hint { display: block; }
   .settings-overlay { align-items: flex-end; padding: 0; }
   .settings-dialog { width: 100%; max-height: 88vh; border-right: 0; border-bottom: 0; border-left: 0; }
 }

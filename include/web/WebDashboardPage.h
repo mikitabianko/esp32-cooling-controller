@@ -97,7 +97,9 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .bad { color: var(--bad); }
 .chart-panel { margin-top: 14px; border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--card); }
 .chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.chart-head > div:first-child { min-width: 0; }
 .chart-head h2 { margin-bottom: 4px; }
+#chartWindow { display: block; min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 16px; font-variant-numeric: tabular-nums; }
 .chart-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .chart-actions button { padding: 7px 9px; font-size: 12px; }
 .chart-legend { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; min-height: 22px; }
@@ -110,6 +112,7 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .chart-tooltip span { color: var(--muted); }
 .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 14px; pointer-events: none; }
 .chart-empty.hidden { display: none; }
+.chart-touch-hint { display: none; margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.35; }
 .panel { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
 form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; align-items: end; }
 input,
@@ -180,13 +183,20 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 #saveState { color: var(--muted); font-size: 13px; }
 
 @media (max-width: 560px) {
+  main { padding: 14px; }
   header { align-items: flex-start; flex-direction: column; }
   .actions,
   .toolbar { justify-content: flex-start; }
+  .chart-panel { margin-right: -8px; margin-left: -8px; padding: 12px; }
   .chart-head { flex-direction: column; }
-  .chart-actions { justify-content: flex-start; }
-  .chart-legend { justify-content: flex-start; }
-  .chart-wrap { height: 300px; }
+  .chart-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; gap: 6px; }
+  .chart-actions button { min-height: 42px; padding: 8px 6px; font-size: 11px; line-height: 1.15; }
+  .chart-legend { grid-column: 1 / -1; justify-content: flex-start; gap: 8px 10px; }
+  .legend-item { gap: 5px; font-size: 11px; }
+  .legend-swatch { width: 18px; }
+  .chart-wrap { height: min(62vh, 360px); min-height: 310px; }
+  .chart-tooltip { max-width: calc(100% - 24px); min-width: 132px; }
+  .chart-touch-hint { display: block; }
   .settings-overlay { align-items: flex-end; padding: 0; }
   .settings-dialog { width: 100%; max-height: 88vh; border-right: 0; border-bottom: 0; border-left: 0; }
 }
@@ -232,6 +242,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
         <div id="chartTooltip" class="chart-tooltip hidden"></div>
         <div id="chartEmpty" class="chart-empty">Waiting for measurements</div>
       </div>
+      <div class="chart-touch-hint">Tap for values. Pinch to zoom. Swipe while zoomed to move.</div>
     </section>
   </main>
   <div id="settingsOverlay" class="settings-overlay" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
@@ -329,20 +340,19 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
   const minChartWindowMs = 5 * 60 * 1000;
   const keepaliveMs = 30 * 1000;
   const disconnectedFlag = 1;
+  const demoChartWarmupMs = 6 * 60 * 1000;
+  const demoTimeScale = 16;
+  const demoSampleIntervalMs = 500;
+  const statusFetchTimeoutMs = 900;
+  const historyFetchTimeoutMs = 1200;
   const chartSamples = [];
-  const fallbackScene = {
-    targetC: 5.0,
-    rawTemperatureC: 5.6,
-    liveFilteredC: null,
-    updateCount: 0,
-    disconnectedUntilMs: 0,
-    nextDisconnectAtMs: 22000,
-    nextTargetChangeAtMs: 36000
-  };
   let lastChartUptimeMs = 0;
   let lastChartSampleKey = '';
   let zoomRange = null;
+  let zoomFollowsRight = false;
   let pointerState = null;
+  let hasRealStatus = false;
+  let demoChartSeeded = false;
   const setState = (id, on) => {
     const el = document.getElementById(id);
     el.textContent = on ? 'ON' : 'OFF';
@@ -362,20 +372,46 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     return minutes + ':' + String(remainingSeconds).padStart(2, '0');
   };
   const latestChartTime = () => Math.max(lastChartUptimeMs, ...chartSamples.map((sample) => sample.timeMs), 0);
+  const isCoarsePointer = () => (
+    window.matchMedia && window.matchMedia('(pointer: coarse)').matches
+  );
   const pushChartSample = (sample) => {
-    if (!Number.isFinite(sample.timeMs)) return;
-    const existing = chartSamples.findIndex((item) => item.timeMs === sample.timeMs);
+    const normalizedSample = normalizeChartSample(sample);
+    if (!Number.isFinite(normalizedSample.timeMs)) return;
+    const existing = chartSamples.findIndex((item) => item.timeMs === normalizedSample.timeMs);
     if (existing >= 0) chartSamples.splice(existing, 1);
-    chartSamples.push(sample);
+    chartSamples.push(normalizedSample);
     chartSamples.sort((left, right) => left.timeMs - right.timeMs);
-    lastChartUptimeMs = Math.max(lastChartUptimeMs, sample.timeMs);
+    lastChartUptimeMs = Math.max(lastChartUptimeMs, normalizedSample.timeMs);
   };
+  const numericOrNull = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const normalizeChartSample = (sample) => ({
+    ...sample,
+    timeMs: Number(sample.timeMs),
+    temperature: numericOrNull(sample.temperature),
+    target: numericOrNull(sample.target),
+    disconnected: Boolean(sample.disconnected)
+  });
   const addChartSample = (data) => {
+    if (data.demo && hasRealStatus) return;
+    if (!data.demo && !hasRealStatus && demoChartSeeded) {
+      chartSamples.splice(0, chartSamples.length);
+      lastChartSampleKey = '';
+      zoomRange = null;
+      zoomFollowsRight = false;
+      demoChartSeeded = false;
+    }
+    if (!data.demo) hasRealStatus = true;
     const timeMs = sampleTimeMs(data);
     if (timeMs + 1000 < lastChartUptimeMs) {
       chartSamples.splice(0, chartSamples.length);
       lastChartSampleKey = '';
       zoomRange = null;
+      zoomFollowsRight = false;
     }
     lastChartUptimeMs = timeMs;
     const disconnected = Boolean(data.sensorDisconnected) || !data.hasTemperature;
@@ -388,7 +424,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     ].join(':');
     if (lastChartSampleKey === sampleKey) return;
     lastChartSampleKey = sampleKey;
-    pushChartSample({
+    pushChartSample(normalizeChartSample({
       timeMs,
       temperature: Number.isFinite(temperature) ? temperature : null,
       target: Number.isFinite(target) ? target : null,
@@ -396,16 +432,13 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       sensorValid: !disconnected,
       status: disconnected ? 'unavailable' : 'ok',
       flags: disconnected ? disconnectedFlag : 0
-    });
+    }));
     const cutoffMs = latestChartTime() - Math.max(minChartWindowMs, keepaliveMs * 4);
     while (chartSamples.length > 1200 && chartSamples[0].timeMs < cutoffMs) chartSamples.shift();
   };
   const applyHistory = (history) => {
     if (!history || !Array.isArray(history.series)) return;
-    chartSamples.splice(0, chartSamples.length);
-    lastChartUptimeMs = 0;
-    lastChartSampleKey = '';
-    zoomRange = null;
+    const historySamples = [];
     history.series.forEach((remoteSeries) => {
       if (remoteSeries.id !== 'probe1' || !Array.isArray(remoteSeries.points)) return;
       remoteSeries.points.forEach((point) => {
@@ -415,7 +448,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
           point.length > 5 ? Number(point[5]) === 1 : (flags & disconnectedFlag) !== 0;
         const sensorValid =
           point.length > 4 ? Number(point[4]) === 1 : !disconnected;
-        pushChartSample({
+        const sample = normalizeChartSample({
           timeMs: Number(point[0]),
           temperature: disconnected ? null : Number(point[1]) / 10,
           target: Number(point[2]) / 10,
@@ -424,18 +457,43 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
           status: sensorValid ? 'ok' : 'unavailable',
           flags
         });
+        if (Number.isFinite(sample.timeMs)) historySamples.push(sample);
       });
     });
+    if (!historySamples.length && chartSamples.length) return;
+    chartSamples.splice(0, chartSamples.length);
+    lastChartUptimeMs = 0;
+    lastChartSampleKey = '';
+    zoomRange = null;
+    zoomFollowsRight = false;
+    historySamples.forEach(pushChartSample);
   };
   const loadHistory = async () => {
     try {
-      const res = await fetch('/api/history', { cache: 'no-store' });
+      const res = await fetchWithTimeout('/api/history', { cache: 'no-store' }, historyFetchTimeoutMs);
       if (!res.ok) throw new Error('history unavailable');
       applyHistory(await res.json());
       drawTemperatureChart();
     } catch (error) {
       // History is optional; live samples will continue filling the chart.
     }
+  };
+  const fetchWithTimeout = (url, options, timeoutMs) => {
+    const controller = window.AbortController ? new AbortController() : null;
+    let timeoutId = null;
+    const timeout = new Promise((_, reject) => {
+      timeoutId = window.setTimeout(() => {
+        if (controller) controller.abort();
+        reject(new Error('request timeout'));
+      }, timeoutMs);
+    });
+    const requestOptions = controller
+      ? { ...(options || {}), signal: controller.signal }
+      : (options || {});
+    return Promise.race([fetch(url, requestOptions), timeout])
+      .finally(() => {
+        if (timeoutId !== null) window.clearTimeout(timeoutId);
+      });
   };
   const chartColors = () => {
     const style = getComputedStyle(document.documentElement);
@@ -468,28 +526,36 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     });
   };
   const chartRange = (full) => {
-    const latest = latestChartTime();
-    const fullEnd = Math.max(minChartWindowMs, latest);
+    const fullEnd = chartDisplayEnd();
     if (full) return { startMs: 0, endMs: fullEnd, spanMs: fullEnd };
     if (zoomRange) {
       const rawStartMs = Math.min(zoomRange.startMs, zoomRange.endMs);
       const rawEndMs = Math.max(zoomRange.startMs, zoomRange.endMs);
       const spanMs = Math.max(1000, rawEndMs - rawStartMs);
-      const startMs = clamp(rawStartMs, 0, Math.max(0, fullEnd - spanMs));
+      const liveEnd = zoomConstraintEnd(spanMs);
+      const maxStartMs = Math.max(0, liveEnd - spanMs);
+      const startMs = zoomFollowsRight ||
+        isChartRightEdge(rawEndMs, liveEnd, spanMs) ||
+        isChartRightEdge(rawEndMs, fullEnd, spanMs)
+        ? maxStartMs
+        : clamp(rawStartMs, 0, maxStartMs);
       const endMs = startMs + spanMs;
       zoomRange = { startMs, endMs };
+      zoomFollowsRight = isChartRightEdge(endMs, liveEnd, spanMs);
       return { startMs, endMs, spanMs: endMs - startMs };
     }
     return { startMs: 0, endMs: fullEnd, spanMs: fullEnd };
   };
   const panZoomRange = (deltaMs) => {
     if (!zoomRange || !Number.isFinite(deltaMs)) return false;
-    const fullEnd = Math.max(minChartWindowMs, latestChartTime());
     const startMs = Math.min(zoomRange.startMs, zoomRange.endMs);
     const endMs = Math.max(zoomRange.startMs, zoomRange.endMs);
     const spanMs = Math.max(1000, endMs - startMs);
-    const nextStartMs = clamp(startMs + deltaMs, 0, Math.max(0, fullEnd - spanMs));
+    const liveEnd = zoomConstraintEnd(spanMs);
+    const maxStartMs = Math.max(0, liveEnd - spanMs);
+    const nextStartMs = clamp(startMs + deltaMs, 0, maxStartMs);
     zoomRange = { startMs: nextStartMs, endMs: nextStartMs + spanMs };
+    zoomFollowsRight = isChartRightEdge(zoomRange.endMs, liveEnd, spanMs);
     return true;
   };
   const drawChartInto = (canvas, full) => {
@@ -523,6 +589,11 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       .filter((sample, index, samples) => samples.findIndex((item) => item.timeMs === sample.timeMs) === index)
       .sort((left, right) => left.timeMs - right.timeMs);
     const values = plotSamples.flatMap((sample) => [sample.temperature, sample.target].filter(Number.isFinite));
+    if (!values.length && zoomRange && !full) {
+      zoomRange = null;
+      zoomFollowsRight = false;
+      return drawChartInto(canvas, false);
+    }
     if (!values.length) return null;
     const minValue = Math.min(...values);
     const maxValue = Math.max(...values);
@@ -531,11 +602,12 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     const yMax = Math.ceil((maxValue + valuePadding) * 2) / 2;
     const span = Math.max(1, yMax - yMin);
     const scale = full ? 1 : dpr;
+    const compact = !full && canvas.getBoundingClientRect().width < 440;
     const pad = {
-      left: 76 * scale,
-      right: 18 * scale,
-      top: (full ? 54 : 18) * scale,
-      bottom: 50 * scale
+      left: (compact ? 54 : 76) * scale,
+      right: (compact ? 8 : 18) * scale,
+      top: (full ? 54 : (compact ? 14 : 18)) * scale,
+      bottom: (compact ? 42 : 50) * scale
     };
     const plotW = Math.max(1, width - pad.left - pad.right);
     const plotH = Math.max(1, height - pad.top - pad.bottom);
@@ -578,9 +650,10 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     ctx.fillStyle = colors.text;
     ctx.textBaseline = 'middle';
 
-    for (let i = 0; i <= 4; i += 1) {
-      const y = pad.top + (plotH / 4) * i;
-      const value = yMax - (span / 4) * i;
+    const yTicks = compact ? 3 : 4;
+    for (let i = 0; i <= yTicks; i += 1) {
+      const y = pad.top + (plotH / yTicks) * i;
+      const value = yMax - (span / yTicks) * i;
       ctx.beginPath();
       ctx.moveTo(pad.left, y);
       ctx.lineTo(width - pad.right, y);
@@ -590,14 +663,15 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     }
 
     ctx.textBaseline = 'top';
-    for (let i = 0; i <= 3; i += 1) {
-      const x = pad.left + (plotW / 3) * i;
-      const timeMs = range.startMs + (range.spanMs / 3) * i;
+    const xTicks = compact ? 2 : 3;
+    for (let i = 0; i <= xTicks; i += 1) {
+      const x = pad.left + (plotW / xTicks) * i;
+      const timeMs = range.startMs + (range.spanMs / xTicks) * i;
       ctx.beginPath();
       ctx.moveTo(x, pad.top);
       ctx.lineTo(x, pad.top + plotH);
       ctx.stroke();
-      ctx.textAlign = i === 0 ? 'left' : (i === 3 ? 'right' : 'center');
+      ctx.textAlign = i === 0 ? 'left' : (i === xTicks ? 'right' : 'center');
       ctx.fillText(formatTime(timeMs), x, pad.top + plotH + 8 * scale);
     }
 
@@ -610,16 +684,18 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     ctx.stroke();
 
     ctx.fillStyle = colors.text;
-    ctx.font = String(12 * scale) + 'px system-ui, sans-serif';
+    ctx.font = String((compact ? 11 : 12) * scale) + 'px system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
     ctx.fillText('Uptime', pad.left + plotW / 2, height - 4 * scale);
-    ctx.save();
-    ctx.translate(13 * scale, pad.top + plotH / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.textBaseline = 'top';
-    ctx.fillText('Temperature, °C', 0, 0);
-    ctx.restore();
+    if (!compact) {
+      ctx.save();
+      ctx.translate(13 * scale, pad.top + plotH / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textBaseline = 'top';
+      ctx.fillText('Temperature, °C', 0, 0);
+      ctx.restore();
+    }
 
     const drawLine = (key, color, allowGaps) => {
       ctx.strokeStyle = color;
@@ -711,6 +787,11 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     return geometry;
   };
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+  const chartDisplayEnd = () => Math.max(minChartWindowMs, latestChartTime());
+  const zoomConstraintEnd = (spanMs) => Math.max(Math.max(1000, spanMs), latestChartTime());
+  const isChartRightEdge = (endMs, fullEnd, spanMs) => (
+    Math.abs(endMs - fullEnd) <= Math.max(1500, spanMs * 0.002)
+  );
   const pointerPoint = (canvas, event) => {
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -726,6 +807,10 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
   );
   const clampToPlotX = (geometry, x) => (
     clamp(x, geometry.pad.left, geometry.pad.left + geometry.plotW)
+  );
+  const isPlotRightEdge = (geometry, x) => (
+    Math.abs(x - (geometry.pad.left + geometry.plotW)) <=
+      Math.max(8 * (window.devicePixelRatio || 1), geometry.plotW * 0.01)
   );
   const nearestSample = (canvas, event) => {
     const geometry = drawTemperatureChart();
@@ -799,14 +884,40 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
   const resetChartZoom = () => {
     if (!zoomRange) return;
     zoomRange = null;
+    zoomFollowsRight = false;
     showTooltip(null);
     drawTemperatureChart();
+  };
+  const midpoint = (left, right) => ({
+    x: (left.x + right.x) / 2,
+    y: (left.y + right.y) / 2
+  });
+  const distance = (left, right) => Math.hypot(left.x - right.x, left.y - right.y);
+  const zoomAroundPoint = (geometry, centerX, scaleFactor) => {
+    if (!geometry || !Number.isFinite(scaleFactor) || scaleFactor <= 0) return false;
+    const fullEnd = chartDisplayEnd();
+    const range = chartRange(false);
+    const currentSpan = Math.max(1000, range.endMs - range.startMs);
+    const minSpan = Math.max(keepaliveMs, fullEnd / 80);
+    const nextSpan = clamp(currentSpan / scaleFactor, minSpan, fullEnd);
+    const ratio = clamp((centerX - geometry.pad.left) / geometry.plotW, 0, 1);
+    const centerTime = range.startMs + ratio * currentSpan;
+    const liveEnd = zoomConstraintEnd(nextSpan);
+    const maxStartMs = Math.max(0, liveEnd - nextSpan);
+    let startMs = clamp(centerTime - ratio * nextSpan, 0, maxStartMs);
+    zoomFollowsRight = isChartRightEdge(startMs + nextSpan, liveEnd, nextSpan) ||
+      (zoomFollowsRight && ratio > 0.96) ||
+      isPlotRightEdge(geometry, centerX);
+    if (zoomFollowsRight) startMs = maxStartMs;
+    zoomRange = { startMs, endMs: startMs + nextSpan };
+    return true;
   };
   const clearChartSamples = () => {
     chartSamples.splice(0, chartSamples.length);
     lastChartUptimeMs = 0;
     lastChartSampleKey = '';
     zoomRange = null;
+    zoomFollowsRight = false;
     showTooltip(null);
     drawTemperatureChart();
   };
@@ -815,18 +926,37 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     lastChartUptimeMs = 0;
     lastChartSampleKey = '';
     zoomRange = null;
+    zoomFollowsRight = false;
     (samples || []).forEach(pushChartSample);
     drawTemperatureChart();
   };
   const attachChartInteractions = (chartCanvas) => {
     if (!chartCanvas || chartCanvas.dataset.chartInteractions === '1') return;
     chartCanvas.dataset.chartInteractions = '1';
+    const activePointers = new Map();
+    let pinchState = null;
     const stopPointerDrag = () => {
       pointerState = null;
+      pinchState = null;
       showTooltip(null);
       drawTemperatureChart();
     };
     chartCanvas.addEventListener('pointerdown', (event) => {
+      activePointers.set(event.pointerId, pointerPoint(chartCanvas, event));
+      if (activePointers.size === 2) {
+        const points = Array.from(activePointers.values());
+        const geometry = drawTemperatureChart();
+        const center = midpoint(points[0], points[1]);
+        pointerState = null;
+        pinchState = geometry && inPlotArea(geometry, center)
+          ? {
+              distance: distance(points[0], points[1])
+            }
+          : null;
+        chartCanvas.setPointerCapture(event.pointerId);
+        showTooltip(null);
+        return;
+      }
       const geometry = drawTemperatureChart();
       const point = pointerPoint(chartCanvas, event);
       if (!geometry || !inPlotArea(geometry, point)) {
@@ -836,7 +966,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       const x = clampToPlotX(geometry, point.x);
       const activeRange = chartRange(false);
       pointerState = {
-        mode: zoomRange ? 'pan' : 'zoom',
+        mode: isCoarsePointer() ? 'inspect' : (zoomRange ? 'pan' : 'zoom'),
         startX: x,
         currentX: x,
         startRange: { startMs: activeRange.startMs, endMs: activeRange.endMs },
@@ -846,13 +976,29 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       showTooltip(null);
     });
     chartCanvas.addEventListener('pointermove', (event) => {
+      if (activePointers.has(event.pointerId)) {
+        activePointers.set(event.pointerId, pointerPoint(chartCanvas, event));
+      }
+      if (pinchState && activePointers.size >= 2) {
+        const points = Array.from(activePointers.values()).slice(0, 2);
+        const geometry = drawTemperatureChart();
+        const nextDistance = distance(points[0], points[1]);
+        const center = midpoint(points[0], points[1]);
+        if (geometry && nextDistance > 0) {
+          zoomAroundPoint(geometry, clampToPlotX(geometry, center.x), nextDistance / pinchState.distance);
+          pinchState = { distance: nextDistance };
+        }
+        showTooltip(null);
+        drawTemperatureChart();
+        return;
+      }
       if (pointerState) {
         const geometry = drawTemperatureChart();
         const point = pointerPoint(chartCanvas, event);
         const dpr = window.devicePixelRatio || 1;
         pointerState.currentX = geometry ? clampToPlotX(geometry, point.x) : point.x;
         pointerState.dragging = Math.abs(pointerState.currentX - pointerState.startX) > 8 * dpr;
-        if (geometry && pointerState.dragging && pointerState.mode === 'pan') {
+        if (geometry && pointerState.dragging && (pointerState.mode === 'pan' || (pointerState.mode === 'inspect' && zoomRange))) {
           const spanMs = Math.max(1000, pointerState.startRange.endMs - pointerState.startRange.startMs);
           const deltaMs = ((pointerState.startX - pointerState.currentX) / geometry.plotW) * spanMs;
           zoomRange = {
@@ -883,6 +1029,17 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       }
     }, { passive: false });
     chartCanvas.addEventListener('pointerup', (event) => {
+      activePointers.delete(event.pointerId);
+      if (pinchState) {
+        if (chartCanvas.hasPointerCapture && chartCanvas.hasPointerCapture(event.pointerId)) {
+          chartCanvas.releasePointerCapture(event.pointerId);
+        }
+        pinchState = null;
+        pointerState = null;
+        showTooltip(null);
+        drawTemperatureChart();
+        return;
+      }
       if (pointerState && pointerState.dragging && pointerState.mode === 'zoom') {
         const geometry = drawTemperatureChart();
         if (geometry) {
@@ -895,22 +1052,36 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
             const endMs = geometry.range.startMs +
               ((right - geometry.pad.left) / geometry.plotW) * geometry.range.spanMs;
             zoomRange = { startMs, endMs };
+            const spanMs = Math.max(1000, endMs - startMs);
+            zoomFollowsRight = isPlotRightEdge(geometry, right) ||
+              isChartRightEdge(endMs, zoomConstraintEnd(spanMs), spanMs);
           }
         }
+      } else if (pointerState && !pointerState.dragging) {
+        showTooltip(nearestSample(chartCanvas, event));
       }
-      showTooltip(null);
       if (chartCanvas.hasPointerCapture && chartCanvas.hasPointerCapture(event.pointerId)) {
         chartCanvas.releasePointerCapture(event.pointerId);
       }
       pointerState = null;
       drawTemperatureChart();
     });
-    chartCanvas.addEventListener('pointercancel', stopPointerDrag);
+    chartCanvas.addEventListener('pointercancel', (event) => {
+      activePointers.delete(event.pointerId);
+      stopPointerDrag();
+    });
     chartCanvas.addEventListener('lostpointercapture', () => {
       if (pointerState) stopPointerDrag();
     });
     chartCanvas.addEventListener('pointerleave', () => {
       if (!pointerState) showTooltip(null);
+    });
+    chartCanvas.addEventListener('contextlost', (event) => {
+      event.preventDefault();
+      showTooltip(null);
+    });
+    chartCanvas.addEventListener('contextrestored', () => {
+      drawTemperatureChart();
     });
   };
   window.CoolingChart = {
@@ -926,44 +1097,38 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     downloadCsv: downloadCsvFromSamples,
     samples: chartSamples
   };
-  const lowPass = (previous, current, alpha) => (
-    Number.isFinite(previous) ? previous + (current - previous) * alpha : current
+  const demoElapsedMs = () => (
+    demoChartWarmupMs + Math.floor((Date.now() - startedAt) * demoTimeScale)
   );
-  const fallbackStatus = () => {
-    const elapsedMs = Date.now() - startedAt;
-    if (elapsedMs >= fallbackScene.nextTargetChangeAtMs) {
-      fallbackScene.targetC = 4.4 + Math.random() * 1.8;
-      fallbackScene.nextTargetChangeAtMs = elapsedMs + 28000 + Math.random() * 34000;
-    }
-    if (elapsedMs >= fallbackScene.nextDisconnectAtMs) {
-      fallbackScene.disconnectedUntilMs = elapsedMs + 4500 + Math.random() * 4500;
-      fallbackScene.nextDisconnectAtMs = elapsedMs + 38000 + Math.random() * 28000;
-    }
-    const disconnected = elapsedMs < fallbackScene.disconnectedUntilMs;
-    if (!disconnected) {
-      const targetPull = (fallbackScene.targetC - fallbackScene.rawTemperatureC) * 0.018;
-      const baselineWave = Math.sin(elapsedMs / 26000) * 0.035;
-      const noise = (Math.random() * 2 - 1) * 0.1;
-      fallbackScene.rawTemperatureC += targetPull + baselineWave + noise;
-      fallbackScene.liveFilteredC = lowPass(fallbackScene.liveFilteredC, fallbackScene.rawTemperatureC, 0.65);
-    }
-    fallbackScene.updateCount += 1;
-    const peltierRunning = Math.floor(elapsedMs / 7000) % 2 === 0;
+  const fallbackStatus = (timeMs = demoElapsedMs()) => {
+    const targetC = 5.0 +
+      Math.sin(timeMs / 90000) * 0.65 +
+      Math.sin(timeMs / 31000) * 0.18;
+    const rawTemperatureC = targetC +
+      Math.sin(timeMs / 42000 + 1.1) * 0.78 +
+      Math.sin(timeMs / 11500) * 0.14;
+    const filteredTemperatureC = targetC +
+      Math.sin((timeMs - 1800) / 42000 + 1.1) * 0.64 +
+      Math.sin(timeMs / 16500) * 0.08;
+    const disconnectPhaseMs = timeMs % 95000;
+    const disconnected = disconnectPhaseMs > 61000 && disconnectPhaseMs < 69000;
+    const peltierRunning = !disconnected && filteredTemperatureC > targetC + 0.08;
+    const fanRunOnActive = !peltierRunning && (timeMs % 18000) < 6500;
     return {
-      temperatureC: Number.isFinite(fallbackScene.liveFilteredC) ? fallbackScene.liveFilteredC : fallbackScene.rawTemperatureC,
-      filteredTemperatureC: Number.isFinite(fallbackScene.liveFilteredC) ? fallbackScene.liveFilteredC : fallbackScene.rawTemperatureC,
+      temperatureC: disconnected ? null : rawTemperatureC,
+      filteredTemperatureC: disconnected ? null : filteredTemperatureC,
       hasTemperature: !disconnected,
       sensorDisconnected: disconnected,
-      updateCount: fallbackScene.updateCount,
+      updateCount: Math.floor(timeMs / demoSampleIntervalMs),
       peltierRunning,
-      fanRunning: peltierRunning || Math.floor(elapsedMs / 3000) % 5 === 0,
-      fanRunOnActive: !peltierRunning && Math.floor(elapsedMs / 3000) % 5 === 0,
-      fanRunOnRemainingMs: 12000 - (elapsedMs % 12000),
-      targetC: fallbackScene.targetC,
+      fanRunning: peltierRunning || fanRunOnActive,
+      fanRunOnActive,
+      fanRunOnRemainingMs: fanRunOnActive ? 6500 - (timeMs % 18000) : 0,
+      targetC,
       hysteresisC: 0.1,
-      measurementIntervalMs: 500,
+      measurementIntervalMs: demoSampleIntervalMs,
       fanRunOnMs: 30000,
-      uptimeMs: elapsedMs,
+      uptimeMs: timeMs,
       accessPointSsid: 'CoolingController',
       accessPointIp: '',
       stationSsid: '',
@@ -974,6 +1139,18 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       stationRssi: 0,
       demo: true
     };
+  };
+  const syncDemoChart = (latestStatus) => {
+    if (!latestStatus.demo || hasRealStatus) return;
+    const latestMs = sampleTimeMs(latestStatus);
+    const startMs = demoChartSeeded || chartSamples.length
+      ? lastChartUptimeMs + demoSampleIntervalMs
+      : Math.max(0, latestMs - demoChartWarmupMs);
+    for (let timeMs = startMs; timeMs <= latestMs; timeMs += demoSampleIntervalMs) {
+      addChartSample(fallbackStatus(timeMs));
+    }
+    addChartSample(latestStatus);
+    demoChartSeeded = true;
   };
   const pageUrl = (ip) => ip ? 'http://' + ip + '/' : '--';
   const signalQuality = (rssi) => {
@@ -1202,7 +1379,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     });
     async function loadStatus() {
       try {
-        const res = await fetch('/api/status', { cache: 'no-store' });
+        const res = await fetchWithTimeout('/api/status', { cache: 'no-store' }, statusFetchTimeoutMs);
         if (!res.ok) throw new Error('status unavailable');
         const data = await res.json();
         data.demo = false;
@@ -1213,7 +1390,8 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     }
     async function refresh() {
       const data = await loadStatus();
-      addChartSample(data);
+      if (data.demo) syncDemoChart(data);
+      else addChartSample(data);
       demoBadge.classList.toggle('hidden', !data.demo);
       const filteredTemperature = Number(data.filteredTemperatureC ?? data.temperatureC);
       setText('temperature', data.hasTemperature && !data.sensorDisconnected ? formatTemperature(filteredTemperature) : '-- °C');
