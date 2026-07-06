@@ -2,6 +2,22 @@
 
 #include <Arduino.h>
 
+#ifndef COOLING_OTA_ENABLED
+#define COOLING_OTA_ENABLED 1
+#endif
+
+#ifndef COOLING_OTA_HOSTNAME
+#define COOLING_OTA_HOSTNAME "cooling-controller"
+#endif
+
+#ifndef COOLING_OTA_PASSWORD
+#define COOLING_OTA_PASSWORD ""
+#endif
+
+#ifndef COOLING_OTA_PASSWORD_HASH
+#define COOLING_OTA_PASSWORD_HASH ""
+#endif
+
 namespace Config {
 namespace Pins {
 constexpr uint8_t I2cSda = 21;
@@ -33,6 +49,13 @@ constexpr size_t MaxStationSsidLength = 32;
 constexpr size_t MaxStationPasswordLength = 64;
 constexpr uint16_t WebServerPort = 80;
 } // namespace Network
+
+namespace Ota {
+constexpr bool Enabled = COOLING_OTA_ENABLED;
+constexpr const char *Hostname = COOLING_OTA_HOSTNAME;
+constexpr const char *Password = COOLING_OTA_PASSWORD;
+constexpr const char *PasswordHash = COOLING_OTA_PASSWORD_HASH;
+} // namespace Ota
 
 namespace Debug {
 constexpr unsigned long SerialBaud = 115200;

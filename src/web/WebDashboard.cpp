@@ -1,5 +1,6 @@
 #include "web/WebDashboard.h"
 
+#include <Update.h>
 #include <WiFi.h>
 #include <cstdlib>
 #include <cstring>
@@ -123,6 +124,11 @@ IPAddress WebDashboard::begin()
   server_.on("/api/settings", HTTP_GET, [this]() { handleGetSettings(); });
   server_.on("/api/settings", HTTP_POST, [this]() { handleSaveSettings(); });
   server_.on("/api/networks", HTTP_GET, [this]() { handleNetworks(); });
+  server_.on(
+      "/api/firmware",
+      HTTP_POST,
+      [this]() { handleFirmwareUploadComplete(); },
+      [this]() { handleFirmwareUploadStream(); });
   server_.onNotFound([this]() { handleNotFound(); });
   server_.begin();
   connectStation();
@@ -157,6 +163,10 @@ void WebDashboard::update()
   maintainStationConnection();
   updateNetworkScan();
   server_.handleClient();
+  if (firmwareRestartPending_ &&
+      static_cast<long>(millis() - firmwareRestartAtMs_) >= 0) {
+    ESP.restart();
+  }
 }
 
 void WebDashboard::setStartupProgressHandler(StartupProgressHandler handler,
@@ -202,6 +212,11 @@ bool WebDashboard::takePendingSettings(AppSettings &settings)
   settings = pendingSettings_;
   hasPendingSettings_ = false;
   return true;
+}
+
+void WebDashboard::setOtaStatus(const OtaStatus &status)
+{
+  otaStatus_ = status;
 }
 
 IPAddress WebDashboard::ipAddress() const
@@ -299,6 +314,82 @@ void WebDashboard::handleNetworks()
   server_.send(200, "application/json", networksJson());
 }
 
+void WebDashboard::handleFirmwareUploadComplete()
+{
+  if (!firmwareUploadOk_) {
+    String json = "{\"ok\":false,\"error\":";
+    json += jsonString(firmwareUploadError_.length() > 0
+                           ? firmwareUploadError_
+                           : String("firmware upload failed"));
+    json += "}";
+    server_.send(500, "application/json", json);
+    return;
+  }
+
+  firmwareRestartPending_ = true;
+  firmwareRestartAtMs_ = millis() + 1200;
+  server_.send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
+}
+
+void WebDashboard::handleFirmwareUploadStream()
+{
+  HTTPUpload &upload = server_.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    firmwareUploadOk_ = false;
+    firmwareUploadError_ = "";
+    DEBUG_PRINT("HTTP firmware update started: ");
+    DEBUG_PRINTLN(upload.filename);
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+      firmwareUploadError_ = Update.errorString();
+      DEBUG_PRINT("HTTP firmware update failed: ");
+      DEBUG_PRINTLN(firmwareUploadError_);
+      return;
+    }
+    firmwareUploadOk_ = true;
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_WRITE) {
+    if (!firmwareUploadOk_) {
+      return;
+    }
+    const size_t written = Update.write(upload.buf, upload.currentSize);
+    if (written != upload.currentSize) {
+      firmwareUploadOk_ = false;
+      firmwareUploadError_ = Update.errorString();
+      Update.abort();
+      DEBUG_PRINT("HTTP firmware update failed: ");
+      DEBUG_PRINTLN(firmwareUploadError_);
+    }
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_END) {
+    if (!firmwareUploadOk_) {
+      return;
+    }
+    if (!Update.end(true)) {
+      firmwareUploadOk_ = false;
+      firmwareUploadError_ = Update.errorString();
+      DEBUG_PRINT("HTTP firmware update failed: ");
+      DEBUG_PRINTLN(firmwareUploadError_);
+      return;
+    }
+    DEBUG_PRINT("HTTP firmware update completed: ");
+    DEBUG_PRINT(upload.totalSize);
+    DEBUG_PRINTLN(" bytes");
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_ABORTED) {
+    firmwareUploadOk_ = false;
+    firmwareUploadError_ = "upload aborted";
+    Update.abort();
+    DEBUG_PRINTLN("HTTP firmware update failed: upload aborted");
+  }
+}
+
 void WebDashboard::handleNotFound()
 {
   const char *page = webPageForPath(server_.uri());
@@ -360,6 +451,7 @@ String WebDashboard::statusJson() const
                                                    : String(""));
   json += ",\"stationRssi\":";
   json += WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
+  appendOtaJson(json);
   json += "}";
   return json;
 }
@@ -426,8 +518,30 @@ String WebDashboard::settingsJson() const
                                                    : String(""));
   json += ",\"stationRssi\":";
   json += WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
+  appendOtaJson(json);
   json += "}";
   return json;
+}
+
+void WebDashboard::appendOtaJson(String &json) const
+{
+  json += ",\"otaEnabled\":";
+  json += boolText(otaStatus_.enabled);
+  json += ",\"otaStarted\":";
+  json += boolText(otaStatus_.started);
+  json += ",\"otaUpdating\":";
+  json += boolText(otaStatus_.updating);
+  json += ",\"otaProgress\":";
+  json += otaStatus_.progressPercent;
+  json += ",\"otaStatus\":";
+  json += jsonString(otaStatus_.state);
+  json += ",\"otaHostname\":";
+  json += jsonString(Config::Ota::Hostname);
+  json += ",\"otaPasswordSet\":";
+  json += boolText(strlen(Config::Ota::Password) > 0 ||
+                   strlen(Config::Ota::PasswordHash) > 0);
+  json += ",\"otaLastError\":";
+  json += jsonString(otaStatus_.lastError);
 }
 
 String WebDashboard::networksJson()

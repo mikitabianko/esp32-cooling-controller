@@ -156,6 +156,9 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 .password-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
 .password-control button { min-width: 44px; padding: 4px 0 8px; border-radius: 0; color: var(--primary); background: transparent; font-size: 12px; font-weight: 650; }
 .forget-network { justify-self: start; padding: 0; background: transparent; color: var(--bad); font-size: 13px; font-weight: 650; }
+.firmware-update { grid-column: 1 / -1; display: grid; gap: 12px; }
+.firmware-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#firmwareUploadState { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; color: var(--text); }
 .switch-row strong { display: block; font-size: 14px; font-weight: 600; }
 .switch-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
@@ -200,6 +203,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       <div class="card"><div class="label">Target</div><div id="target" class="value small">--</div></div>
       <div class="card"><div class="label">Uptime</div><div id="uptime" class="value small">--</div></div>
       <div class="card"><div class="label">WiFi network</div><div id="wifi" class="value small">--</div></div>
+      <div class="card"><div class="label">OTA</div><div id="ota" class="value small">--</div></div>
     </section>
     <section class="chart-panel" aria-labelledby="temperatureChartTitle">
       <div class="chart-head">
@@ -243,6 +247,8 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
               <div class="status-line"><strong>Device hotspot</strong><span id="apStatus">--</span></div>
               <div class="status-line"><strong>Hotspot page</strong><span id="apPageStatus">--</span></div>
               <div class="status-line"><strong>Current page</strong><span id="currentPageStatus">--</span></div>
+              <div class="status-line"><strong>OTA service</strong><span id="otaStatus">--</span></div>
+              <div class="status-line"><strong>OTA hostname</strong><span id="otaHostname">--</span></div>
             </div>
           </div>
           <div class="scan-panel">
@@ -264,6 +270,16 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
             </label>
             <input id="forgetStationNetworkInput" name="forgetStationNetwork" type="hidden" value="0">
             <button id="forgetStationNetwork" class="forget-network" type="button">Forget network</button>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h3 class="section-title">Firmware</h3>
+          <div class="firmware-update">
+            <label class="network-field">Firmware image<input id="firmwareFileInput" type="file" accept=".bin,application/octet-stream"><span>Use the generated firmware.bin file</span></label>
+            <div class="firmware-actions">
+              <button id="firmwareUpload" type="button">Upload firmware</button>
+              <span id="firmwareUploadState"></span>
+            </div>
           </div>
         </section>
         <div class="form-actions">
@@ -575,6 +591,14 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       stationStatus: 'disabled',
       stationIp: '',
       stationRssi: 0,
+      otaEnabled: true,
+      otaStarted: false,
+      otaUpdating: false,
+      otaProgress: 0,
+      otaStatus: 'waiting',
+      otaHostname: 'cooling-controller',
+      otaPasswordSet: false,
+      otaLastError: '',
       devMode: false,
       demo: true
     };
@@ -601,10 +625,26 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     stationStatus: 'disabled',
     stationIp: '',
     stationRssi: 0,
+    otaEnabled: true,
+    otaStarted: false,
+    otaUpdating: false,
+    otaProgress: 0,
+    otaStatus: 'waiting',
+    otaHostname: 'cooling-controller',
+    otaPasswordSet: false,
+    otaLastError: '',
     devMode: true,
     demo: true
   });
   const pageUrl = (ip) => ip ? 'http://' + ip + '/' : '--';
+  const otaStatusText = (data) => {
+    if (!data.otaEnabled) return 'Disabled';
+    if (data.otaUpdating) return 'Updating ' + (Number(data.otaProgress) || 0) + '%';
+    if (data.otaStatus === 'failed') return 'Failed' + (data.otaLastError ? ': ' + data.otaLastError : '');
+    if (data.otaStatus === 'completed') return 'Completed';
+    if (data.otaStarted) return 'Ready';
+    return data.stationConnected ? 'Starting' : 'Waiting for Wi-Fi';
+  };
   const signalQuality = (rssi) => {
     if (rssi >= -55) return 'Excellent';
     if (rssi >= -67) return 'Good';
@@ -635,6 +675,9 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     const hiddenNetworkInput = document.getElementById('hiddenNetworkInput');
     const forgetStationNetworkInput = document.getElementById('forgetStationNetworkInput');
     const forgetStationNetwork = document.getElementById('forgetStationNetwork');
+    const firmwareFileInput = document.getElementById('firmwareFileInput');
+    const firmwareUpload = document.getElementById('firmwareUpload');
+    const firmwareUploadState = document.getElementById('firmwareUploadState');
     let settingsDirty = false;
     let networkScanStartedAt = 0;
     let currentSavedStationSsid = '';
@@ -675,6 +718,8 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       setText('stationStatus', data.stationSsid ? data.stationSsid : (data.stationLastFailure ? 'Failed' : 'Not connected'));
       setText('stationPageStatus', data.stationConnected ? pageUrl(data.stationIp) : (data.stationSsid ? (data.stationStatus || 'disconnected') : 'Wi-Fi off'));
       setText('currentPageStatus', window.location.origin || '--');
+      setText('otaStatus', otaStatusText(data));
+      setText('otaHostname', data.otaHostname ? data.otaHostname + (data.otaPasswordSet ? ' / password' : ' / open') : '--');
     };
     const renderNetworks = (networks) => {
       networkList.textContent = '';
@@ -811,6 +856,47 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       settingsDirty = true;
       saveState.textContent = 'Network will be forgotten on save';
     });
+    firmwareUpload.addEventListener('click', () => {
+      const file = firmwareFileInput.files && firmwareFileInput.files[0];
+      if (!file) {
+        firmwareUploadState.textContent = 'Choose firmware.bin first';
+        return;
+      }
+
+      const body = new FormData();
+      body.append('firmware', file, file.name);
+      const request = new XMLHttpRequest();
+      firmwareUpload.disabled = true;
+      firmwareUploadState.textContent = 'Uploading...';
+
+      request.upload.addEventListener('progress', (event) => {
+        if (!event.lengthComputable) return;
+        const percent = Math.round((event.loaded * 100) / event.total);
+        firmwareUploadState.textContent = 'Uploading ' + percent + '%';
+      });
+
+      request.addEventListener('load', () => {
+        firmwareUpload.disabled = false;
+        if (request.status >= 200 && request.status < 300) {
+          firmwareUploadState.textContent = 'Uploaded; rebooting';
+          return;
+        }
+        try {
+          const data = JSON.parse(request.responseText);
+          firmwareUploadState.textContent = data.error || 'Upload failed';
+        } catch (error) {
+          firmwareUploadState.textContent = 'Upload failed';
+        }
+      });
+
+      request.addEventListener('error', () => {
+        firmwareUpload.disabled = false;
+        firmwareUploadState.textContent = 'Upload failed';
+      });
+
+      request.open('POST', '/api/firmware');
+      request.send(body);
+    });
     settingsOverlay.addEventListener('click', (event) => {
       if (event.target === settingsOverlay) closeSettings();
     });
@@ -845,6 +931,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       setText('target', data.targetC.toFixed(1) + ' C / hys ' + data.hysteresisC.toFixed(1));
       setText('uptime', Math.floor(data.uptimeMs / 1000) + ' s');
       setText('wifi', data.stationSsid ? (data.stationConnected ? data.stationIp : (data.stationStatus || 'Disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
+      setText('ota', otaStatusText(data));
       renderNetworkStatus(data);
       applySettingsToForm(data);
       drawTemperatureChart();
@@ -1057,6 +1144,9 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 .password-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
 .password-control button { min-width: 44px; padding: 4px 0 8px; border-radius: 0; color: var(--primary); background: transparent; font-size: 12px; font-weight: 650; }
 .forget-network { justify-self: start; padding: 0; background: transparent; color: var(--bad); font-size: 13px; font-weight: 650; }
+.firmware-update { grid-column: 1 / -1; display: grid; gap: 12px; }
+.firmware-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#firmwareUploadState { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; color: var(--text); }
 .switch-row strong { display: block; font-size: 14px; font-weight: 600; }
 .switch-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }

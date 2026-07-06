@@ -243,6 +243,14 @@
       stationStatus: 'disabled',
       stationIp: '',
       stationRssi: 0,
+      otaEnabled: true,
+      otaStarted: false,
+      otaUpdating: false,
+      otaProgress: 0,
+      otaStatus: 'waiting',
+      otaHostname: 'cooling-controller',
+      otaPasswordSet: false,
+      otaLastError: '',
       devMode: false,
       demo: true
     };
@@ -269,10 +277,26 @@
     stationStatus: 'disabled',
     stationIp: '',
     stationRssi: 0,
+    otaEnabled: true,
+    otaStarted: false,
+    otaUpdating: false,
+    otaProgress: 0,
+    otaStatus: 'waiting',
+    otaHostname: 'cooling-controller',
+    otaPasswordSet: false,
+    otaLastError: '',
     devMode: true,
     demo: true
   });
   const pageUrl = (ip) => ip ? 'http://' + ip + '/' : '--';
+  const otaStatusText = (data) => {
+    if (!data.otaEnabled) return 'Disabled';
+    if (data.otaUpdating) return 'Updating ' + (Number(data.otaProgress) || 0) + '%';
+    if (data.otaStatus === 'failed') return 'Failed' + (data.otaLastError ? ': ' + data.otaLastError : '');
+    if (data.otaStatus === 'completed') return 'Completed';
+    if (data.otaStarted) return 'Ready';
+    return data.stationConnected ? 'Starting' : 'Waiting for Wi-Fi';
+  };
   const signalQuality = (rssi) => {
     if (rssi >= -55) return 'Excellent';
     if (rssi >= -67) return 'Good';
@@ -303,6 +327,9 @@
     const hiddenNetworkInput = document.getElementById('hiddenNetworkInput');
     const forgetStationNetworkInput = document.getElementById('forgetStationNetworkInput');
     const forgetStationNetwork = document.getElementById('forgetStationNetwork');
+    const firmwareFileInput = document.getElementById('firmwareFileInput');
+    const firmwareUpload = document.getElementById('firmwareUpload');
+    const firmwareUploadState = document.getElementById('firmwareUploadState');
     let settingsDirty = false;
     let networkScanStartedAt = 0;
     let currentSavedStationSsid = '';
@@ -343,6 +370,8 @@
       setText('stationStatus', data.stationSsid ? data.stationSsid : (data.stationLastFailure ? 'Failed' : 'Not connected'));
       setText('stationPageStatus', data.stationConnected ? pageUrl(data.stationIp) : (data.stationSsid ? (data.stationStatus || 'disconnected') : 'Wi-Fi off'));
       setText('currentPageStatus', window.location.origin || '--');
+      setText('otaStatus', otaStatusText(data));
+      setText('otaHostname', data.otaHostname ? data.otaHostname + (data.otaPasswordSet ? ' / password' : ' / open') : '--');
     };
     const renderNetworks = (networks) => {
       networkList.textContent = '';
@@ -479,6 +508,47 @@
       settingsDirty = true;
       saveState.textContent = 'Network will be forgotten on save';
     });
+    firmwareUpload.addEventListener('click', () => {
+      const file = firmwareFileInput.files && firmwareFileInput.files[0];
+      if (!file) {
+        firmwareUploadState.textContent = 'Choose firmware.bin first';
+        return;
+      }
+
+      const body = new FormData();
+      body.append('firmware', file, file.name);
+      const request = new XMLHttpRequest();
+      firmwareUpload.disabled = true;
+      firmwareUploadState.textContent = 'Uploading...';
+
+      request.upload.addEventListener('progress', (event) => {
+        if (!event.lengthComputable) return;
+        const percent = Math.round((event.loaded * 100) / event.total);
+        firmwareUploadState.textContent = 'Uploading ' + percent + '%';
+      });
+
+      request.addEventListener('load', () => {
+        firmwareUpload.disabled = false;
+        if (request.status >= 200 && request.status < 300) {
+          firmwareUploadState.textContent = 'Uploaded; rebooting';
+          return;
+        }
+        try {
+          const data = JSON.parse(request.responseText);
+          firmwareUploadState.textContent = data.error || 'Upload failed';
+        } catch (error) {
+          firmwareUploadState.textContent = 'Upload failed';
+        }
+      });
+
+      request.addEventListener('error', () => {
+        firmwareUpload.disabled = false;
+        firmwareUploadState.textContent = 'Upload failed';
+      });
+
+      request.open('POST', '/api/firmware');
+      request.send(body);
+    });
     settingsOverlay.addEventListener('click', (event) => {
       if (event.target === settingsOverlay) closeSettings();
     });
@@ -513,6 +583,7 @@
       setText('target', data.targetC.toFixed(1) + ' C / hys ' + data.hysteresisC.toFixed(1));
       setText('uptime', Math.floor(data.uptimeMs / 1000) + ' s');
       setText('wifi', data.stationSsid ? (data.stationConnected ? data.stationIp : (data.stationStatus || 'Disconnected')) : (data.stationLastFailure ? 'Failed: ' + data.stationLastFailure : 'Disabled'));
+      setText('ota', otaStatusText(data));
       renderNetworkStatus(data);
       applySettingsToForm(data);
       drawTemperatureChart();

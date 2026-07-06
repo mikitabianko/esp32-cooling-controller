@@ -5,6 +5,7 @@
 #include <WebServer.h>
 #include "domain/AppSettings.h"
 #include "domain/CoolingController.h"
+#include "ota/OtaManager.h"
 
 struct DashboardSnapshot {
   float temperatureC = 0.0F;
@@ -46,6 +47,7 @@ public:
                                  void *context);
   void setSnapshot(const DashboardSnapshot &snapshot);
   void setSettings(const AppSettings &settings);
+  void setOtaStatus(const OtaStatus &status);
   bool takePendingSettings(AppSettings &settings);
   IPAddress ipAddress() const;
 
@@ -62,10 +64,13 @@ private:
   void handleGetSettings();
   void handleSaveSettings();
   void handleNetworks();
+  void handleFirmwareUploadComplete();
+  void handleFirmwareUploadStream();
   void handleNotFound();
   String statusJson() const;
   String historyJson() const;
   String settingsJson() const;
+  void appendOtaJson(String &json) const;
   String networksJson();
   String devJson() const;
   String jsonString(const String &value) const;
@@ -105,6 +110,7 @@ private:
   IPAddress ipAddress_;
   DashboardSnapshot snapshot_;
   DevDashboardState devState_;
+  OtaStatus otaStatus_;
   AppSettings settings_;
   AppSettings persistedSettings_;
   AppSettings pendingSettings_;
@@ -131,4 +137,8 @@ private:
   size_t temperatureHistoryCount_ = 0;
   unsigned long lastTemperatureHistorySampleMs_ = 0;
   bool hasTemperatureHistorySample_ = false;
+  bool firmwareUploadOk_ = false;
+  bool firmwareRestartPending_ = false;
+  unsigned long firmwareRestartAtMs_ = 0;
+  String firmwareUploadError_;
 };
