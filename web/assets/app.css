@@ -157,6 +157,9 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
 .password-control { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
 .password-control button { min-width: 44px; padding: 4px 0 8px; border-radius: 0; color: var(--primary); background: transparent; font-size: 12px; font-weight: 650; }
 .forget-network { justify-self: start; padding: 0; background: transparent; color: var(--bad); font-size: 13px; font-weight: 650; }
+.firmware-update { grid-column: 1 / -1; display: grid; gap: 12px; }
+.firmware-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+#firmwareUploadState { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 48px; color: var(--text); }
 .switch-row strong { display: block; font-size: 14px; font-weight: 600; }
 .switch-row small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }

@@ -37,6 +37,8 @@ first build.
 - Embedded web dashboard for live status, settings, and an automatic local demo
   scene when the board connection is unavailable.
 - Persistent settings stored in ESP32 Preferences/NVS.
+- ArduinoOTA firmware updates after the controller joins a station Wi-Fi
+  network.
 - Native Unity tests for domain logic and generated dashboard embedding.
 
 ## Hardware
@@ -68,9 +70,23 @@ Wi-Fi defaults:
 | Access point SSID | `CoolingController` |
 | Access point password | `cooling123` |
 | Web server port | `80` |
+| OTA hostname | `cooling-controller` |
 
 The access point is always started. Station mode can be configured from the
 dashboard by saving a station SSID and password.
+
+OTA defaults:
+
+| Setting | Build flag |
+| --- | --- |
+| Enable OTA | `-DCOOLING_OTA_ENABLED=1` |
+| Device hostname | `-DCOOLING_OTA_HOSTNAME=\"cooling-controller\"` |
+| Plain password | `-DCOOLING_OTA_PASSWORD=\"\"` |
+| MD5 password hash | `-DCOOLING_OTA_PASSWORD_HASH=\"\"` |
+
+OTA has no password by default. Prefer setting `COOLING_OTA_PASSWORD_HASH` in a
+local PlatformIO environment or private build command instead of committing a
+secret.
 
 ## Project Structure
 
@@ -80,6 +96,7 @@ include/
   config/     Pins, defaults, and bounds
   domain/     Testable cooling logic and settings model
   hardware/   DS18B20 and relay adapters
+  ota/        ArduinoOTA service wrapper
   storage/    Persistent settings via Preferences
   ui/         OLED display view
   web/        Dashboard server and generated HTML page header
@@ -87,6 +104,7 @@ src/
   app/        Application orchestration implementation
   domain/     Logic without direct hardware access
   hardware/   Concrete ESP32, sensor, and relay access
+  ota/        OTA setup, callbacks, and polling
   storage/    Preferences integration
   ui/         OLED rendering
   web/        HTTP routes, JSON responses, and Wi-Fi handling
@@ -146,6 +164,38 @@ pio device monitor
 ```
 
 The default PlatformIO environment is `wemos_d1_mini32`.
+
+## OTA Firmware Updates
+
+Flash the firmware once over USB, open the dashboard access point, and save the
+station Wi-Fi SSID/password. OTA starts only after the ESP32 connects to that
+station network. The serial monitor prints `OTA service started` with the
+hostname and station IP when updates are available.
+
+Upload over Wi-Fi by hostname:
+
+```sh
+pio run -e wemos_d1_mini32_ota --target upload
+```
+
+Or upload by the station IP shown in the dashboard or serial monitor:
+
+```sh
+pio run -e wemos_d1_mini32_ota --target upload --upload-port 192.168.1.50
+```
+
+If ArduinoOTA cannot reach the device but the dashboard opens in a browser, use
+the web fallback. Build the firmware with `pio run`, open Settings, choose
+`.pio/build/wemos_d1_mini32/firmware.bin` in the Firmware section, and upload it.
+The controller reboots after the HTTP upload completes.
+
+To require an OTA password, add a private build flag such as
+`-DCOOLING_OTA_PASSWORD_HASH=\"<md5-hash>\"` or
+`-DCOOLING_OTA_PASSWORD=\"<password>\"`, and upload with a private
+`upload_flags = --auth=<password>` setting. Disable OTA for a build with
+`-DCOOLING_OTA_ENABLED=0`. The default ESP32 Arduino partition layout used by
+this board already includes OTA app slots, so no custom partition table is
+needed.
 
 ## Tests
 

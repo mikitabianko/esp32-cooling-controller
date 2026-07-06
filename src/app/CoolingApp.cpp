@@ -44,7 +44,11 @@ void CoolingApp::begin()
 void CoolingApp::update()
 {
   const unsigned long now = millis();
+  dashboard_.setOtaStatus(ota_.status());
   dashboard_.update();
+  ota_.beginIfReady();
+  ota_.update();
+  dashboard_.setOtaStatus(ota_.status());
 
   AppSettings pendingSettings;
   if (dashboard_.takePendingSettings(pendingSettings)) {

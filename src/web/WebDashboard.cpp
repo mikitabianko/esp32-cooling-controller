@@ -1,5 +1,6 @@
 #include "web/WebDashboard.h"
 
+#include <Update.h>
 #include <WiFi.h>
 #include <cstdlib>
 #include <cstring>
@@ -120,9 +121,16 @@ IPAddress WebDashboard::begin()
   server_.on("/api/status", [this]() { handleStatus(); });
   server_.on("/api/history", HTTP_GET, [this]() { handleHistory(); });
   server_.on("/api/history.csv", HTTP_GET, [this]() { handleHistoryCsv(); });
+  server_.on("/api/dev", HTTP_GET, [this]() { handleGetDevState(); });
+  server_.on("/api/dev", HTTP_POST, [this]() { handleSaveDevState(); });
   server_.on("/api/settings", HTTP_GET, [this]() { handleGetSettings(); });
   server_.on("/api/settings", HTTP_POST, [this]() { handleSaveSettings(); });
   server_.on("/api/networks", HTTP_GET, [this]() { handleNetworks(); });
+  server_.on(
+      "/api/firmware",
+      HTTP_POST,
+      [this]() { handleFirmwareUploadComplete(); },
+      [this]() { handleFirmwareUploadStream(); });
   server_.onNotFound([this]() { handleNotFound(); });
   server_.begin();
   connectStation();
@@ -157,6 +165,10 @@ void WebDashboard::update()
   maintainStationConnection();
   updateNetworkScan();
   server_.handleClient();
+  if (firmwareRestartPending_ &&
+      static_cast<long>(millis() - firmwareRestartAtMs_) >= 0) {
+    ESP.restart();
+  }
 }
 
 void WebDashboard::setStartupProgressHandler(StartupProgressHandler handler,
@@ -213,6 +225,11 @@ bool WebDashboard::takePendingSettings(AppSettings &settings)
   return true;
 }
 
+void WebDashboard::setOtaStatus(const OtaStatus &status)
+{
+  otaStatus_ = status;
+}
+
 IPAddress WebDashboard::ipAddress() const
 {
   return ipAddress_;
@@ -241,6 +258,25 @@ void WebDashboard::handleHistory()
 void WebDashboard::handleHistoryCsv()
 {
   server_.send(200, "text/csv; charset=utf-8", historyCsv());
+}
+
+void WebDashboard::handleGetDevState()
+{
+  server_.send(200, "application/json", devJson());
+}
+
+void WebDashboard::handleSaveDevState()
+{
+  DevDashboardState state;
+  if (!readDevArgs(state)) {
+    server_.send(400,
+                 "application/json",
+                 "{\"ok\":false,\"error\":\"invalid dev state\"}");
+    return;
+  }
+
+  devState_ = state;
+  server_.send(200, "application/json", devJson());
 }
 
 void WebDashboard::handleGetSettings()
@@ -301,6 +337,82 @@ void WebDashboard::handleNetworks()
   server_.send(200, "application/json", networksJson());
 }
 
+void WebDashboard::handleFirmwareUploadComplete()
+{
+  if (!firmwareUploadOk_) {
+    String json = "{\"ok\":false,\"error\":";
+    json += jsonString(firmwareUploadError_.length() > 0
+                           ? firmwareUploadError_
+                           : String("firmware upload failed"));
+    json += "}";
+    server_.send(500, "application/json", json);
+    return;
+  }
+
+  firmwareRestartPending_ = true;
+  firmwareRestartAtMs_ = millis() + 1200;
+  server_.send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
+}
+
+void WebDashboard::handleFirmwareUploadStream()
+{
+  HTTPUpload &upload = server_.upload();
+
+  if (upload.status == UPLOAD_FILE_START) {
+    firmwareUploadOk_ = false;
+    firmwareUploadError_ = "";
+    DEBUG_PRINT("HTTP firmware update started: ");
+    DEBUG_PRINTLN(upload.filename);
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) {
+      firmwareUploadError_ = Update.errorString();
+      DEBUG_PRINT("HTTP firmware update failed: ");
+      DEBUG_PRINTLN(firmwareUploadError_);
+      return;
+    }
+    firmwareUploadOk_ = true;
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_WRITE) {
+    if (!firmwareUploadOk_) {
+      return;
+    }
+    const size_t written = Update.write(upload.buf, upload.currentSize);
+    if (written != upload.currentSize) {
+      firmwareUploadOk_ = false;
+      firmwareUploadError_ = Update.errorString();
+      Update.abort();
+      DEBUG_PRINT("HTTP firmware update failed: ");
+      DEBUG_PRINTLN(firmwareUploadError_);
+    }
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_END) {
+    if (!firmwareUploadOk_) {
+      return;
+    }
+    if (!Update.end(true)) {
+      firmwareUploadOk_ = false;
+      firmwareUploadError_ = Update.errorString();
+      DEBUG_PRINT("HTTP firmware update failed: ");
+      DEBUG_PRINTLN(firmwareUploadError_);
+      return;
+    }
+    DEBUG_PRINT("HTTP firmware update completed: ");
+    DEBUG_PRINT(upload.totalSize);
+    DEBUG_PRINTLN(" bytes");
+    return;
+  }
+
+  if (upload.status == UPLOAD_FILE_ABORTED) {
+    firmwareUploadOk_ = false;
+    firmwareUploadError_ = "upload aborted";
+    Update.abort();
+    DEBUG_PRINTLN("HTTP firmware update failed: upload aborted");
+  }
+}
+
 void WebDashboard::handleNotFound()
 {
   const char *page = webPageForPath(server_.uri());
@@ -313,7 +425,7 @@ void WebDashboard::handleNotFound()
 
 String WebDashboard::statusJson() const
 {
-  const DashboardSnapshot snapshot = snapshot_;
+  const DashboardSnapshot snapshot = effectiveSnapshot();
   String json;
   json.reserve(560);
   json += "{";
@@ -345,6 +457,8 @@ String WebDashboard::statusJson() const
   json += settings_.fanRunOnMs;
   json += ",\"uptimeMs\":";
   json += snapshot.uptimeMs;
+  json += ",\"devMode\":";
+  json += boolText(devState_.enabled);
   json += ",\"accessPointSsid\":";
   json += jsonString(Config::Network::AccessPointSsid);
   json += ",\"accessPointIp\":";
@@ -362,6 +476,7 @@ String WebDashboard::statusJson() const
                                                    : String(""));
   json += ",\"stationRssi\":";
   json += WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
+  appendOtaJson(json);
   json += "}";
   return json;
 }
@@ -472,8 +587,30 @@ String WebDashboard::settingsJson() const
                                                    : String(""));
   json += ",\"stationRssi\":";
   json += WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
+  appendOtaJson(json);
   json += "}";
   return json;
+}
+
+void WebDashboard::appendOtaJson(String &json) const
+{
+  json += ",\"otaEnabled\":";
+  json += boolText(otaStatus_.enabled);
+  json += ",\"otaStarted\":";
+  json += boolText(otaStatus_.started);
+  json += ",\"otaUpdating\":";
+  json += boolText(otaStatus_.updating);
+  json += ",\"otaProgress\":";
+  json += otaStatus_.progressPercent;
+  json += ",\"otaStatus\":";
+  json += jsonString(otaStatus_.state);
+  json += ",\"otaHostname\":";
+  json += jsonString(Config::Ota::Hostname);
+  json += ",\"otaPasswordSet\":";
+  json += boolText(strlen(Config::Ota::Password) > 0 ||
+                   strlen(Config::Ota::PasswordHash) > 0);
+  json += ",\"otaLastError\":";
+  json += jsonString(otaStatus_.lastError);
 }
 
 String WebDashboard::networksJson()
@@ -499,6 +636,33 @@ String WebDashboard::networksJson()
     return lastNetworkScanJson_;
   }
   return networkScanJson("failed", false, WIFI_SCAN_FAILED);
+}
+
+String WebDashboard::devJson() const
+{
+  String json;
+  json.reserve(260);
+  json += "{\"ok\":true";
+  json += ",\"enabled\":";
+  json += boolText(devState_.enabled);
+  json += ",\"temperatureC\":";
+  json += devState_.temperatureC;
+  json += ",\"hasTemperature\":";
+  json += boolText(devState_.hasTemperature);
+  json += ",\"sensorDisconnected\":";
+  json += boolText(devState_.sensorDisconnected);
+  json += ",\"updateCount\":";
+  json += devState_.updateCount;
+  json += ",\"peltierRunning\":";
+  json += boolText(devState_.coolingState.peltierRunning);
+  json += ",\"fanRunning\":";
+  json += boolText(devState_.coolingState.fanRunning);
+  json += ",\"fanRunOnActive\":";
+  json += boolText(devState_.coolingState.fanRunOnActive);
+  json += ",\"fanRunOnRemainingMs\":";
+  json += devState_.coolingState.fanRunOnRemainingMs;
+  json += "}";
+  return json;
 }
 
 String WebDashboard::jsonString(const String &value) const
@@ -990,6 +1154,42 @@ bool WebDashboard::readSettingsArgs(AppSettings &settings)
   return true;
 }
 
+bool WebDashboard::readDevArgs(DevDashboardState &state)
+{
+  bool enabled = false;
+  float temperatureC = 0.0F;
+  bool hasTemperature = false;
+  bool sensorDisconnected = false;
+  bool peltierRunning = false;
+  bool fanRunning = false;
+  bool fanRunOnActive = false;
+  unsigned long fanRunOnRemainingMs = 0;
+  int updateCount = 0;
+
+  if (!readBoolArg("enabled", enabled) ||
+      !readFloatArg("temperatureC", temperatureC) ||
+      !readBoolArg("hasTemperature", hasTemperature) ||
+      !readBoolArg("sensorDisconnected", sensorDisconnected) ||
+      !readBoolArg("peltierRunning", peltierRunning) ||
+      !readBoolArg("fanRunning", fanRunning) ||
+      !readBoolArg("fanRunOnActive", fanRunOnActive) ||
+      !readUnsignedLongArg("fanRunOnRemainingMs", fanRunOnRemainingMs) ||
+      !readIntArg("updateCount", updateCount)) {
+    return false;
+  }
+
+  state.enabled = enabled;
+  state.temperatureC = temperatureC;
+  state.hasTemperature = hasTemperature;
+  state.sensorDisconnected = sensorDisconnected;
+  state.updateCount = updateCount < 0 ? 0 : updateCount;
+  state.coolingState.peltierRunning = peltierRunning;
+  state.coolingState.fanRunning = fanRunning;
+  state.coolingState.fanRunOnActive = fanRunOnActive;
+  state.coolingState.fanRunOnRemainingMs = fanRunOnRemainingMs;
+  return true;
+}
+
 bool WebDashboard::readBoolArg(const char *name, bool &value)
 {
   if (!server_.hasArg(name)) {
@@ -1154,6 +1354,23 @@ void WebDashboard::appendTemperatureHistorySample(
   lastStoredSensorDisconnected_ =
       (sample.flags & kTemperatureHistoryDisconnectedFlag) != 0;
   hasTemperatureHistorySample_ = true;
+}
+
+DashboardSnapshot WebDashboard::effectiveSnapshot() const
+{
+  if (!devState_.enabled) {
+    return snapshot_;
+  }
+
+  DashboardSnapshot snapshot;
+  snapshot.temperatureC = devState_.temperatureC;
+  snapshot.hasTemperature = devState_.hasTemperature;
+  snapshot.sensorDisconnected = devState_.sensorDisconnected;
+  snapshot.updateCount = devState_.updateCount;
+  snapshot.coolingState = devState_.coolingState;
+  snapshot.settings = settings_;
+  snapshot.uptimeMs = millis();
+  return snapshot;
 }
 
 int16_t WebDashboard::temperatureToCx10(float temperatureC) const

@@ -5,6 +5,7 @@
 #include <WebServer.h>
 #include "domain/AppSettings.h"
 #include "domain/CoolingController.h"
+#include "ota/OtaManager.h"
 
 struct DashboardSnapshot {
   float temperatureC = 0.0F;
@@ -14,6 +15,15 @@ struct DashboardSnapshot {
   CoolingState coolingState;
   AppSettings settings;
   unsigned long uptimeMs = 0;
+};
+
+struct DevDashboardState {
+  bool enabled = false;
+  float temperatureC = 5.0F;
+  bool hasTemperature = true;
+  bool sensorDisconnected = false;
+  int updateCount = 0;
+  CoolingState coolingState;
 };
 
 struct TemperatureHistorySample {
@@ -38,6 +48,7 @@ public:
                                  void *context);
   void setSnapshot(const DashboardSnapshot &snapshot);
   void setSettings(const AppSettings &settings);
+  void setOtaStatus(const OtaStatus &status);
   bool takePendingSettings(AppSettings &settings);
   IPAddress ipAddress() const;
 
@@ -51,14 +62,20 @@ private:
   void handleStatus();
   void handleHistory();
   void handleHistoryCsv();
+  void handleGetDevState();
+  void handleSaveDevState();
   void handleGetSettings();
   void handleSaveSettings();
   void handleNetworks();
+  void handleFirmwareUploadComplete();
+  void handleFirmwareUploadStream();
   void handleNotFound();
   String statusJson() const;
   String historyJson() const;
   String historyCsv() const;
   String settingsJson() const;
+  String devJson() const;
+  void appendOtaJson(String &json) const;
   String networksJson();
   String jsonString(const String &value) const;
   String boolText(bool value) const;
@@ -84,6 +101,7 @@ private:
   String networkScanJson(const char *status, bool ok, int result) const;
   String completedNetworkScanJson(int networkCount) const;
   bool readSettingsArgs(AppSettings &settings);
+  bool readDevArgs(DevDashboardState &state);
   bool readBoolArg(const char *name, bool &value);
   bool readStringArg(const char *name, String &value);
   bool readIntArg(const char *name, int &value);
@@ -93,12 +111,15 @@ private:
   void recordTemperatureHistory(const DashboardSnapshot &snapshot,
                                 bool forceTargetChange = false);
   void appendTemperatureHistorySample(const TemperatureHistorySample &sample);
+  DashboardSnapshot effectiveSnapshot() const;
   int16_t temperatureToCx10(float temperatureC) const;
   float lowPassFilter(float previous, float current, float alpha) const;
 
   WebServer server_;
   IPAddress ipAddress_;
   DashboardSnapshot snapshot_;
+  DevDashboardState devState_;
+  OtaStatus otaStatus_;
   AppSettings settings_;
   AppSettings persistedSettings_;
   AppSettings pendingSettings_;
@@ -132,4 +153,8 @@ private:
   int16_t lastStoredTemperatureCx10_ = 0;
   int16_t lastStoredTargetCx10_ = 0;
   bool lastStoredSensorDisconnected_ = false;
+  bool firmwareUploadOk_ = false;
+  bool firmwareRestartPending_ = false;
+  unsigned long firmwareRestartAtMs_ = 0;
+  String firmwareUploadError_;
 };

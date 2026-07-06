@@ -5,6 +5,7 @@
 #include "domain/CoolingController.h"
 #include "hardware/RelayModule.h"
 #include "hardware/TemperatureProbe.h"
+#include "ota/OtaManager.h"
 #include "storage/SettingsStore.h"
 #include "ui/OledView.h"
 #include "web/WebDashboard.h"
@@ -25,4 +26,5 @@ private:
   CoolingController controller_;
   OledView view_;
   WebDashboard dashboard_;
+  OtaManager ota_;
 };

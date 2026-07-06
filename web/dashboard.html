@@ -26,6 +26,7 @@
       <div class="card"><div class="label">Target</div><div id="target" class="value small">--</div></div>
       <div class="card"><div class="label">Uptime</div><div id="uptime" class="value small">--</div></div>
       <div class="card"><div class="label">WiFi network</div><div id="wifi" class="value small">--</div></div>
+      <div class="card"><div class="label">OTA</div><div id="ota" class="value small">--</div></div>
     </section>
     <section class="chart-panel" aria-labelledby="temperatureChartTitle">
       <div class="chart-head">
@@ -76,6 +77,8 @@
               <div class="status-line"><strong>Device hotspot</strong><span id="apStatus">--</span></div>
               <div class="status-line"><strong>Hotspot page</strong><span id="apPageStatus">--</span></div>
               <div class="status-line"><strong>Current page</strong><span id="currentPageStatus">--</span></div>
+              <div class="status-line"><strong>OTA service</strong><span id="otaStatus">--</span></div>
+              <div class="status-line"><strong>OTA hostname</strong><span id="otaHostname">--</span></div>
             </div>
           </div>
           <div class="scan-panel">
@@ -97,6 +100,16 @@
             </label>
             <input id="forgetStationNetworkInput" name="forgetStationNetwork" type="hidden" value="0">
             <button id="forgetStationNetwork" class="forget-network" type="button">Forget network</button>
+          </div>
+        </section>
+        <section class="settings-section">
+          <h3 class="section-title">Firmware</h3>
+          <div class="firmware-update">
+            <label class="network-field">Firmware image<input id="firmwareFileInput" type="file" accept=".bin,application/octet-stream"><span>Use the generated firmware.bin file</span></label>
+            <div class="firmware-actions">
+              <button id="firmwareUpload" type="button">Upload firmware</button>
+              <span id="firmwareUploadState"></span>
+            </div>
           </div>
         </section>
         <div class="form-actions">
