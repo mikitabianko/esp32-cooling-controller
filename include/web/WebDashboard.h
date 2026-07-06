@@ -16,18 +16,10 @@ struct DashboardSnapshot {
   unsigned long uptimeMs = 0;
 };
 
-struct DevDashboardState {
-  bool enabled = false;
-  float temperatureC = 5.0F;
-  bool hasTemperature = true;
-  bool sensorDisconnected = false;
-  int updateCount = 0;
-  CoolingState coolingState;
-};
-
 struct TemperatureHistorySample {
   unsigned long uptimeMs = 0;
   int16_t temperatureCx10 = 0;
+  int16_t targetCx10 = 0;
   uint8_t flags = 0;
 };
 
@@ -51,23 +43,23 @@ public:
 
 private:
   static constexpr size_t kTemperatureHistoryCapacity = 720;
-  static constexpr unsigned long kTemperatureHistoryMinIntervalMs = 10000;
+  static constexpr unsigned long kTemperatureHistoryKeepaliveMs = 30000;
+  static constexpr int16_t kTemperatureHistoryChangeCx10 = 1;
   static constexpr uint8_t kTemperatureHistoryDisconnectedFlag = 1U;
 
   void handlePage();
   void handleStatus();
   void handleHistory();
-  void handleGetDevState();
-  void handleSaveDevState();
+  void handleHistoryCsv();
   void handleGetSettings();
   void handleSaveSettings();
   void handleNetworks();
   void handleNotFound();
   String statusJson() const;
   String historyJson() const;
+  String historyCsv() const;
   String settingsJson() const;
   String networksJson();
-  String devJson() const;
   String jsonString(const String &value) const;
   String boolText(bool value) const;
   String wifiScanStatusText(int scanResult) const;
@@ -92,19 +84,21 @@ private:
   String networkScanJson(const char *status, bool ok, int result) const;
   String completedNetworkScanJson(int networkCount) const;
   bool readSettingsArgs(AppSettings &settings);
-  bool readDevArgs(DevDashboardState &state);
   bool readBoolArg(const char *name, bool &value);
   bool readStringArg(const char *name, String &value);
   bool readIntArg(const char *name, int &value);
   bool readFloatArg(const char *name, float &value);
   bool readUnsignedLongArg(const char *name, unsigned long &value);
-  void recordTemperatureHistory(const DashboardSnapshot &snapshot);
-  DashboardSnapshot effectiveSnapshot() const;
+  void recordTargetChange(unsigned long uptimeMs);
+  void recordTemperatureHistory(const DashboardSnapshot &snapshot,
+                                bool forceTargetChange = false);
+  void appendTemperatureHistorySample(const TemperatureHistorySample &sample);
+  int16_t temperatureToCx10(float temperatureC) const;
+  float lowPassFilter(float previous, float current, float alpha) const;
 
   WebServer server_;
   IPAddress ipAddress_;
   DashboardSnapshot snapshot_;
-  DevDashboardState devState_;
   AppSettings settings_;
   AppSettings persistedSettings_;
   AppSettings pendingSettings_;
@@ -131,4 +125,11 @@ private:
   size_t temperatureHistoryCount_ = 0;
   unsigned long lastTemperatureHistorySampleMs_ = 0;
   bool hasTemperatureHistorySample_ = false;
+  float liveFilteredTemperatureC_ = 0.0F;
+  float storedFilteredTemperatureC_ = 0.0F;
+  bool hasLiveFilteredTemperature_ = false;
+  bool hasStoredFilteredTemperature_ = false;
+  int16_t lastStoredTemperatureCx10_ = 0;
+  int16_t lastStoredTargetCx10_ = 0;
+  bool lastStoredSensorDisconnected_ = false;
 };
