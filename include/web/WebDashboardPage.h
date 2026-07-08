@@ -365,7 +365,14 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
   const statusFetchTimeoutMs = 900;
   const historyFetchTimeoutMs = 1200;
   const predictionStorageKey = 'cooling-chart-prediction';
-  const predictionMaxHorizonMs = 60 * 60 * 1000;
+  const predictionMaxHorizonMs = 6 * 60 * 60 * 1000;
+  const predictionLookbackMs = 20 * 60 * 1000;
+  const predictionMaxSampleGapMs = 3 * 60 * 1000;
+  const predictionMinSpanMs = 90 * 1000;
+  const predictionMinSamples = 4;
+  const predictionTargetToleranceC = 0.05;
+  const predictionMaxTargetShiftC = 0.25;
+  const predictionMinClosingSlopeCPerSecond = 0.000015;
   const chartSamples = [];
   let lastChartUptimeMs = 0;
   let lastChartSampleKey = '';
@@ -617,52 +624,194 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       !sample.disconnected
     )) || null
   );
+  const weightedLinearFit = (points) => {
+    if (!points || points.length < 2) return null;
+    let sumW = 0;
+    let sumX = 0;
+    let sumY = 0;
+    points.forEach((point) => {
+      const weight = Number.isFinite(point.weight) && point.weight > 0 ? point.weight : 1;
+      sumW += weight;
+      sumX += point.x * weight;
+      sumY += point.y * weight;
+    });
+    if (sumW <= 0) return null;
+    const meanX = sumX / sumW;
+    const meanY = sumY / sumW;
+    let sxx = 0;
+    let sxy = 0;
+    let syy = 0;
+    points.forEach((point) => {
+      const weight = Number.isFinite(point.weight) && point.weight > 0 ? point.weight : 1;
+      const dx = point.x - meanX;
+      const dy = point.y - meanY;
+      sxx += weight * dx * dx;
+      sxy += weight * dx * dy;
+      syy += weight * dy * dy;
+    });
+    if (sxx <= 0) return null;
+    const slope = sxy / sxx;
+    const intercept = meanY - slope * meanX;
+    let residualSum = 0;
+    points.forEach((point) => {
+      const weight = Number.isFinite(point.weight) && point.weight > 0 ? point.weight : 1;
+      const residual = point.y - (intercept + slope * point.x);
+      residualSum += weight * residual * residual;
+    });
+    const r2 = syy > 0 ? Math.max(0, Math.min(1, (sxy * sxy) / (sxx * syy))) : 0;
+    return {
+      slope,
+      intercept,
+      r2,
+      rmse: Math.sqrt(residualSum / sumW)
+    };
+  };
+  const collectPredictionSamples = (latest) => {
+    const samples = [];
+    const startMs = latest.timeMs - predictionLookbackMs;
+    const targetBandC = Math.max(
+      predictionMaxTargetShiftC,
+      Number.isFinite(latest.hysteresis) ? Math.abs(latest.hysteresis) * 2 : 0
+    );
+    let previousValid = null;
+    for (let i = chartSamples.length - 1; i >= 0; i -= 1) {
+      const sample = chartSamples[i];
+      if (sample.timeMs > latest.timeMs) continue;
+      if (sample.timeMs < startMs) break;
+      const valid = Number.isFinite(sample.timeMs) &&
+        Number.isFinite(sample.temperature) &&
+        Number.isFinite(sample.target) &&
+        !sample.disconnected;
+      if (!valid) {
+        if (samples.length && sample.disconnected) break;
+        continue;
+      }
+      if (Math.abs(sample.target - latest.target) > targetBandC) {
+        if (samples.length) break;
+        continue;
+      }
+      if (previousValid && previousValid.timeMs - sample.timeMs > predictionMaxSampleGapMs) break;
+      samples.push(sample);
+      previousValid = sample;
+    }
+    return samples.reverse();
+  };
+  const predictionTrendStats = (samples, direction) => {
+    let closingWeight = 0;
+    let totalWeight = 0;
+    let totalClosingC = 0;
+    let totalSeconds = 0;
+    for (let i = 1; i < samples.length; i += 1) {
+      const previous = samples[i - 1];
+      const sample = samples[i];
+      const dt = (sample.timeMs - previous.timeMs) / 1000;
+      if (dt <= 0) continue;
+      const previousDistance = direction * (previous.temperature - previous.target);
+      const distance = direction * (sample.temperature - sample.target);
+      if (!Number.isFinite(previousDistance) || !Number.isFinite(distance)) continue;
+      const closingC = previousDistance - distance;
+      const weight = Math.min(dt, 120);
+      totalWeight += weight;
+      totalSeconds += dt;
+      totalClosingC += closingC;
+      if (closingC >= -predictionTargetToleranceC * 0.3) closingWeight += weight;
+    }
+    return {
+      ratio: totalWeight > 0 ? closingWeight / totalWeight : 0,
+      netSlope: totalSeconds > 0 ? totalClosingC / totalSeconds : 0
+    };
+  };
   const buildTemperaturePrediction = () => {
     if (!predictionEnabled) return null;
     const latest = lastValidTemperatureSample();
-    if (!latest || latest.temperature <= latest.target) return null;
-    if (latest.peltierRunning === false && latest.fanRunning === false) return null;
-    const windowStartMs = latest.timeMs - 10 * 60 * 1000;
-    const fitSamples = chartSamples.filter((sample) => (
-      sample.timeMs >= windowStartMs &&
-      sample.timeMs <= latest.timeMs &&
-      Number.isFinite(sample.temperature) &&
-      !sample.disconnected
-    ));
-    if (fitSamples.length < 4) return null;
-    const originMs = fitSamples[0].timeMs;
-    const xs = fitSamples.map((sample) => (sample.timeMs - originMs) / 1000);
-    const ys = fitSamples.map((sample) => sample.temperature);
-    const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length;
-    const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length;
-    const numerator = xs.reduce((sum, value, index) => sum + (value - meanX) * (ys[index] - meanY), 0);
-    const denominator = xs.reduce((sum, value) => sum + (value - meanX) * (value - meanX), 0);
-    if (denominator <= 0) return null;
-    const slopeCPerSecond = numerator / denominator;
-    if (!Number.isFinite(slopeCPerSecond) || slopeCPerSecond >= -0.0002) return null;
-    const diffC = latest.temperature - latest.target;
-    const k = -slopeCPerSecond / Math.max(0.1, diffC);
-    const targetDiffC = 0.05;
-    const etaSeconds = Number.isFinite(k) && k > 0.00002
-      ? Math.log(diffC / targetDiffC) / k
-      : diffC / -slopeCPerSecond;
+    if (!latest || latestChartTime() - latest.timeMs > keepaliveMs * 2) return null;
+    const latestErrorC = latest.temperature - latest.target;
+    const latestDistanceC = Math.abs(latestErrorC);
+    if (!Number.isFinite(latestDistanceC) || latestDistanceC <= predictionTargetToleranceC) return null;
+    const direction = latestErrorC >= 0 ? 1 : -1;
+    const fitSamples = collectPredictionSamples(latest)
+      .map((sample) => {
+        const errorC = sample.temperature - sample.target;
+        const distanceC = direction * errorC;
+        return { ...sample, errorC, distanceC };
+      })
+      .filter((sample) => sample.distanceC > predictionTargetToleranceC * 0.5);
+    if (fitSamples.length < predictionMinSamples) return null;
+    const spanMs = fitSamples[fitSamples.length - 1].timeMs - fitSamples[0].timeMs;
+    if (spanMs < predictionMinSpanMs) return null;
+    const stats = predictionTrendStats(fitSamples, direction);
+    if (stats.ratio < 0.45 && stats.netSlope <= predictionMinClosingSlopeCPerSecond) return null;
+    const durationMs = Math.max(1, spanMs);
+    const weightedPoints = fitSamples.map((sample) => {
+      const recency = (sample.timeMs - fitSamples[0].timeMs) / durationMs;
+      const weight = 0.35 + 0.65 * recency * recency;
+      return {
+        x: (sample.timeMs - latest.timeMs) / 1000,
+        errorC: sample.errorC,
+        distanceC: sample.distanceC,
+        weight
+      };
+    });
+    const linearFit = weightedLinearFit(weightedPoints.map((point) => ({
+      x: point.x,
+      y: point.errorC,
+      weight: point.weight
+    })));
+    const expFit = weightedLinearFit(weightedPoints.map((point) => ({
+      x: point.x,
+      y: Math.log(point.distanceC),
+      weight: point.weight
+    })));
+    const maxEtaSeconds = predictionMaxHorizonMs / 1000;
+    const linearClosingSlope = linearFit ? -direction * linearFit.slope : 0;
+    const linearEtaSeconds = linearClosingSlope > predictionMinClosingSlopeCPerSecond
+      ? (latestDistanceC - predictionTargetToleranceC) / linearClosingSlope
+      : NaN;
+    const expK = expFit ? -expFit.slope : 0;
+    const expEtaSeconds = expK > 0
+      ? Math.log(latestDistanceC / predictionTargetToleranceC) / expK
+      : NaN;
+    const linearValid = Number.isFinite(linearEtaSeconds) &&
+      linearEtaSeconds >= 5 &&
+      linearEtaSeconds <= maxEtaSeconds &&
+      linearClosingSlope > predictionMinClosingSlopeCPerSecond;
+    const expValid = Number.isFinite(expEtaSeconds) &&
+      expEtaSeconds >= 5 &&
+      expEtaSeconds <= maxEtaSeconds &&
+      expK > 0;
+    if (!linearValid && !expValid) return null;
+    const linearScore = linearFit
+      ? linearFit.r2 - Math.min(1, linearFit.rmse / Math.max(latestDistanceC, 0.1)) * 0.25 + stats.ratio * 0.2
+      : -Infinity;
+    const expScore = expFit
+      ? expFit.r2 - Math.min(1, expFit.rmse) * 0.2 + stats.ratio * 0.2 + (latestDistanceC > 0.3 ? 0.05 : 0)
+      : -Infinity;
+    const useExp = expValid && (!linearValid || expScore >= linearScore - 0.05);
+    const etaSeconds = useExp ? expEtaSeconds : linearEtaSeconds;
     const etaMs = etaSeconds * 1000;
-    if (!Number.isFinite(etaMs) || etaMs < 5000 || etaMs > predictionMaxHorizonMs) return null;
     const endMs = latest.timeMs + etaMs;
     const points = [{ timeMs: latest.timeMs, temperature: latest.temperature }];
     const stepMs = Math.max(15000, Math.min(120000, etaMs / 24));
     for (let timeMs = latest.timeMs + stepMs; timeMs < endMs; timeMs += stepMs) {
       const elapsedSeconds = (timeMs - latest.timeMs) / 1000;
-      const predicted = Number.isFinite(k) && k > 0.00002
-        ? latest.target + diffC * Math.exp(-k * elapsedSeconds)
-        : latest.temperature + slopeCPerSecond * elapsedSeconds;
-      points.push({ timeMs, temperature: Math.max(latest.target, predicted) });
+      const distanceC = useExp
+        ? latestDistanceC * Math.exp(-expK * elapsedSeconds)
+        : Math.max(predictionTargetToleranceC, latestDistanceC - linearClosingSlope * elapsedSeconds);
+      points.push({
+        timeMs,
+        temperature: latest.target + direction * Math.max(predictionTargetToleranceC, distanceC)
+      });
     }
-    points.push({ timeMs: endMs, temperature: latest.target });
+    points.push({
+      timeMs: endMs,
+      temperature: latest.target + direction * predictionTargetToleranceC
+    });
     return {
       points,
       etaMs: endMs,
-      target: latest.target
+      target: latest.target,
+      model: useExp ? 'exponential' : 'linear',
+      confidence: Math.max(0, Math.min(1, useExp ? expScore : linearScore))
     };
   };
   const drawChartInto = (canvas, full) => {
@@ -699,6 +848,9 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     const predictionSamples = prediction && prediction.points
       ? prediction.points.filter((sample) => sample.timeMs >= range.startMs && sample.timeMs <= range.endMs)
       : [];
+    const currentSample = chartSamples.slice().reverse().find((sample) => (
+      Number.isFinite(sample.temperature) && !sample.disconnected
+    ));
     const values = plotSamples
       .flatMap((sample) => [
         sample.temperature,
@@ -707,7 +859,8 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
           ? sample.target + sample.hysteresis
           : null
       ].filter(Number.isFinite))
-      .concat(predictionSamples.map((sample) => sample.temperature).filter(Number.isFinite));
+      .concat(predictionSamples.map((sample) => sample.temperature).filter(Number.isFinite))
+      .concat(currentSample ? [currentSample.temperature] : []);
     if (!values.length && zoomRange && !full) {
       zoomRange = null;
       zoomFollowsRight = false;
@@ -731,7 +884,7 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
     const plotW = Math.max(1, width - pad.left - pad.right);
     const plotH = Math.max(1, height - pad.top - pad.bottom);
     const stateLaneH = Math.min((compact ? 18 : 22) * scale, Math.max(0, plotH * 0.18));
-    const stateInset = 5 * scale;
+    const stateInset = 2 * scale;
     const axisY = pad.top + plotH;
     const xFor = (timeMs) => pad.left + ((timeMs - range.startMs) / range.spanMs) * plotW;
     const yFor = (value) => pad.top + (1 - ((value - yMin) / span)) * plotH;
@@ -891,8 +1044,8 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       ctx.restore();
     };
     const drawStateLane = () => {
-      const rowGap = 2 * scale;
-      const rowH = Math.max(2 * scale, Math.min(4 * scale, (stateLaneH - rowGap) / 2));
+      const rowGap = 1 * scale;
+      const rowH = Math.max(1.5 * scale, Math.min(2.5 * scale, (stateLaneH - rowGap) / 2));
       const laneTop = pad.top + plotH - rowH * 2 - rowGap - stateInset;
       const rows = [
         { key: 'peltierRunning', color: colors.peltier, y: laneTop },
@@ -921,12 +1074,14 @@ select { box-sizing: border-box; width: 100%; margin-top: 6px; border: 1px solid
       ctx.restore();
     };
     const drawCurrentTemperatureMarker = () => {
-      const latest = chartSamples.slice().reverse().find((sample) => (
-        Number.isFinite(sample.temperature) && !sample.disconnected
-      ));
-      if (!latest || latest.timeMs < range.startMs || latest.timeMs > range.endMs) return;
+      const latest = currentSample;
+      if (!latest) return;
       const y = yFor(latest.temperature);
-      const x = clamp(xFor(latest.timeMs), pad.left, pad.left + plotW);
+      const rawX = xFor(latest.timeMs);
+      const latestVisible = latest.timeMs >= range.startMs && latest.timeMs <= range.endMs;
+      const x = latestVisible
+        ? clamp(rawX, pad.left, pad.left + plotW)
+        : pad.left + plotW;
       ctx.save();
       ctx.strokeStyle = colors.current;
       ctx.lineWidth = 1 * scale;
