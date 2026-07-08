@@ -4,14 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Cooling Controller</title>
-  <link rel="stylesheet" href="/assets/app.css">
+  <link rel="stylesheet" href="/assets/app.css?v=20260708-prediction-magenta">
 </head>
 <body>
   <main class="narrow">
     <header>
       <h1>Cooling Controller</h1>
       <div class="actions">
-        <span id="demoBadge" class="badge hidden">Demo scene</span>
         <button id="settingsOpen" type="button">Settings</button>
         <button id="themeToggle" type="button">Dark theme</button>
       </div>
@@ -36,6 +35,7 @@
         </div>
         <div class="chart-actions">
           <div id="chartLegend" class="chart-legend"></div>
+          <button id="chartPredictionToggle" type="button" aria-pressed="false">Prediction OFF</button>
           <button id="chartResetZoom" type="button">Reset zoom</button>
           <button id="chartDownloadPng" type="button">Download PNG</button>
           <button id="chartDownloadCsv" type="button">Download CSV</button>
@@ -119,7 +119,7 @@
       </form>
     </section>
   </div>
-  <script src="/assets/app.js"></script>
-  <script src="/assets/dashboard.js"></script>
+  <script src="/assets/app.js?v=20260708-prediction-magenta"></script>
+  <script src="/assets/dashboard.js?v=20260708-prediction-magenta"></script>
 </body>
 </html>

@@ -4,19 +4,24 @@
   const minChartWindowMs = 5 * 60 * 1000;
   const keepaliveMs = 30 * 1000;
   const disconnectedFlag = 1;
-  const demoChartWarmupMs = 6 * 60 * 1000;
-  const demoTimeScale = 16;
-  const demoSampleIntervalMs = 500;
   const statusFetchTimeoutMs = 900;
   const historyFetchTimeoutMs = 1200;
+  const predictionStorageKey = 'cooling-chart-prediction';
+  const predictionMaxHorizonMs = 60 * 60 * 1000;
   const chartSamples = [];
   let lastChartUptimeMs = 0;
   let lastChartSampleKey = '';
   let zoomRange = null;
   let zoomFollowsRight = false;
   let pointerState = null;
-  let hasRealStatus = false;
-  let demoChartSeeded = false;
+  let predictionEnabled = false;
+  const loadPredictionPreference = () => {
+    try {
+      return window.localStorage && window.localStorage.getItem(predictionStorageKey) === '1';
+    } catch (error) {
+      return false;
+    }
+  };
   const setState = (id, on) => {
     const el = document.getElementById(id);
     el.textContent = on ? 'ON' : 'OFF';
@@ -58,18 +63,13 @@
     timeMs: Number(sample.timeMs),
     temperature: numericOrNull(sample.temperature),
     target: numericOrNull(sample.target),
+    hysteresis: numericOrNull(sample.hysteresis),
+    peltierRunning: Boolean(sample.peltierRunning),
+    fanRunning: Boolean(sample.fanRunning),
+    fanRunOnActive: Boolean(sample.fanRunOnActive),
     disconnected: Boolean(sample.disconnected)
   });
   const addChartSample = (data) => {
-    if (data.demo && hasRealStatus) return;
-    if (!data.demo && !hasRealStatus && demoChartSeeded) {
-      chartSamples.splice(0, chartSamples.length);
-      lastChartSampleKey = '';
-      zoomRange = null;
-      zoomFollowsRight = false;
-      demoChartSeeded = false;
-    }
-    if (!data.demo) hasRealStatus = true;
     const timeMs = sampleTimeMs(data);
     if (timeMs + 1000 < lastChartUptimeMs) {
       chartSamples.splice(0, chartSamples.length);
@@ -81,10 +81,15 @@
     const disconnected = Boolean(data.sensorDisconnected) || !data.hasTemperature;
     const temperature = disconnected ? null : Number(data.filteredTemperatureC ?? data.temperatureC);
     const target = Number(data.targetC);
+    const hysteresis = Number(data.hysteresisC);
     const sampleKey = [
       data.updateCount,
       disconnected ? 'x' : temperature.toFixed(2),
-      Number.isFinite(target) ? target.toFixed(2) : ''
+      Number.isFinite(target) ? target.toFixed(2) : '',
+      Number.isFinite(hysteresis) ? hysteresis.toFixed(2) : '',
+      data.peltierRunning ? 'p1' : 'p0',
+      data.fanRunning ? 'f1' : 'f0',
+      data.fanRunOnActive ? 'r1' : 'r0'
     ].join(':');
     if (lastChartSampleKey === sampleKey) return;
     lastChartSampleKey = sampleKey;
@@ -92,6 +97,10 @@
       timeMs,
       temperature: Number.isFinite(temperature) ? temperature : null,
       target: Number.isFinite(target) ? target : null,
+      hysteresis: Number.isFinite(hysteresis) ? hysteresis : null,
+      peltierRunning: Boolean(data.peltierRunning),
+      fanRunning: Boolean(data.fanRunning),
+      fanRunOnActive: Boolean(data.fanRunOnActive),
       disconnected,
       sensorValid: !disconnected,
       status: disconnected ? 'unavailable' : 'ok',
@@ -103,6 +112,10 @@
   const applyHistory = (history) => {
     if (!history || !Array.isArray(history.series)) return;
     const historySamples = [];
+    const historyHysteresis = numericOrNull(history.hysteresisC);
+    const peltierFlag = Number(history.peltierFlag) || 2;
+    const fanFlag = Number(history.fanFlag) || 4;
+    const fanRunOnFlag = Number(history.fanRunOnFlag) || 8;
     history.series.forEach((remoteSeries) => {
       if (remoteSeries.id !== 'probe1' || !Array.isArray(remoteSeries.points)) return;
       remoteSeries.points.forEach((point) => {
@@ -116,6 +129,10 @@
           timeMs: Number(point[0]),
           temperature: disconnected ? null : Number(point[1]) / 10,
           target: Number(point[2]) / 10,
+          hysteresis: point.length > 6 ? numericOrNull(Number(point[6]) / 10) : historyHysteresis,
+          peltierRunning: point.length > 7 ? Number(point[7]) === 1 : (flags & peltierFlag) !== 0,
+          fanRunning: point.length > 8 ? Number(point[8]) === 1 : (flags & fanFlag) !== 0,
+          fanRunOnActive: point.length > 9 ? Number(point[9]) === 1 : (flags & fanRunOnFlag) !== 0,
           disconnected,
           sensorValid,
           status: sensorValid ? 'ok' : 'unavailable',
@@ -161,11 +178,19 @@
   };
   const chartColors = () => {
     const style = getComputedStyle(document.documentElement);
+    const predictionColor = document.documentElement.dataset.theme === 'dark'
+      ? '#ff8df2'
+      : '#e044d0';
     return {
       text: style.getPropertyValue('--muted').trim(),
       grid: style.getPropertyValue('--chart-grid').trim(),
       temperature: style.getPropertyValue('--chart-primary').trim(),
       target: style.getPropertyValue('--chart-target').trim(),
+      hysteresis: style.getPropertyValue('--chart-hysteresis').trim(),
+      current: style.getPropertyValue('--chart-current').trim(),
+      prediction: predictionColor,
+      peltier: style.getPropertyValue('--chart-peltier').trim(),
+      fan: style.getPropertyValue('--chart-fan').trim(),
       disconnected: style.getPropertyValue('--chart-disconnected').trim(),
       selection: style.getPropertyValue('--chart-selection').trim(),
       background: style.getPropertyValue('--card').trim()
@@ -176,11 +201,16 @@
     [
       { label: 'Filtered temperature', color: '--chart-primary' },
       { label: 'Target temperature', color: '--chart-target' },
+      { label: 'Hysteresis band', color: '--chart-hysteresis' },
+      { label: 'Peltier', color: '--chart-peltier' },
+      { label: 'Fan', color: '--chart-fan' },
+      ...(predictionEnabled ? [{ label: 'Prediction', value: chartColors().prediction }] : []),
       { label: 'Sensor unavailable', color: '--chart-disconnected' }
     ].forEach((series) => {
       const item = document.createElement('span');
       item.className = 'legend-item';
-      item.style.color = getComputedStyle(document.documentElement).getPropertyValue(series.color).trim();
+      item.style.color = series.value ||
+        getComputedStyle(document.documentElement).getPropertyValue(series.color).trim();
       const swatch = document.createElement('span');
       swatch.className = 'legend-swatch';
       const label = document.createElement('span');
@@ -222,6 +252,61 @@
     zoomFollowsRight = isChartRightEdge(zoomRange.endMs, liveEnd, spanMs);
     return true;
   };
+  const lastValidTemperatureSample = () => (
+    chartSamples.slice().reverse().find((sample) => (
+      Number.isFinite(sample.temperature) &&
+      Number.isFinite(sample.target) &&
+      !sample.disconnected
+    )) || null
+  );
+  const buildTemperaturePrediction = () => {
+    if (!predictionEnabled) return null;
+    const latest = lastValidTemperatureSample();
+    if (!latest || latest.temperature <= latest.target) return null;
+    if (latest.peltierRunning === false && latest.fanRunning === false) return null;
+    const windowStartMs = latest.timeMs - 10 * 60 * 1000;
+    const fitSamples = chartSamples.filter((sample) => (
+      sample.timeMs >= windowStartMs &&
+      sample.timeMs <= latest.timeMs &&
+      Number.isFinite(sample.temperature) &&
+      !sample.disconnected
+    ));
+    if (fitSamples.length < 4) return null;
+    const originMs = fitSamples[0].timeMs;
+    const xs = fitSamples.map((sample) => (sample.timeMs - originMs) / 1000);
+    const ys = fitSamples.map((sample) => sample.temperature);
+    const meanX = xs.reduce((sum, value) => sum + value, 0) / xs.length;
+    const meanY = ys.reduce((sum, value) => sum + value, 0) / ys.length;
+    const numerator = xs.reduce((sum, value, index) => sum + (value - meanX) * (ys[index] - meanY), 0);
+    const denominator = xs.reduce((sum, value) => sum + (value - meanX) * (value - meanX), 0);
+    if (denominator <= 0) return null;
+    const slopeCPerSecond = numerator / denominator;
+    if (!Number.isFinite(slopeCPerSecond) || slopeCPerSecond >= -0.0002) return null;
+    const diffC = latest.temperature - latest.target;
+    const k = -slopeCPerSecond / Math.max(0.1, diffC);
+    const targetDiffC = 0.05;
+    const etaSeconds = Number.isFinite(k) && k > 0.00002
+      ? Math.log(diffC / targetDiffC) / k
+      : diffC / -slopeCPerSecond;
+    const etaMs = etaSeconds * 1000;
+    if (!Number.isFinite(etaMs) || etaMs < 5000 || etaMs > predictionMaxHorizonMs) return null;
+    const endMs = latest.timeMs + etaMs;
+    const points = [{ timeMs: latest.timeMs, temperature: latest.temperature }];
+    const stepMs = Math.max(15000, Math.min(120000, etaMs / 24));
+    for (let timeMs = latest.timeMs + stepMs; timeMs < endMs; timeMs += stepMs) {
+      const elapsedSeconds = (timeMs - latest.timeMs) / 1000;
+      const predicted = Number.isFinite(k) && k > 0.00002
+        ? latest.target + diffC * Math.exp(-k * elapsedSeconds)
+        : latest.temperature + slopeCPerSecond * elapsedSeconds;
+      points.push({ timeMs, temperature: Math.max(latest.target, predicted) });
+    }
+    points.push({ timeMs: endMs, temperature: latest.target });
+    return {
+      points,
+      etaMs: endMs,
+      target: latest.target
+    };
+  };
   const drawChartInto = (canvas, full) => {
     const rect = full ? { width: 1200, height: 620 } : canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -252,7 +337,19 @@
       .filter(Boolean)
       .filter((sample, index, samples) => samples.findIndex((item) => item.timeMs === sample.timeMs) === index)
       .sort((left, right) => left.timeMs - right.timeMs);
-    const values = plotSamples.flatMap((sample) => [sample.temperature, sample.target].filter(Number.isFinite));
+    const prediction = predictionEnabled ? buildTemperaturePrediction() : null;
+    const predictionSamples = prediction && prediction.points
+      ? prediction.points.filter((sample) => sample.timeMs >= range.startMs && sample.timeMs <= range.endMs)
+      : [];
+    const values = plotSamples
+      .flatMap((sample) => [
+        sample.temperature,
+        sample.target,
+        Number.isFinite(sample.target) && Number.isFinite(sample.hysteresis)
+          ? sample.target + sample.hysteresis
+          : null
+      ].filter(Number.isFinite))
+      .concat(predictionSamples.map((sample) => sample.temperature).filter(Number.isFinite));
     if (!values.length && zoomRange && !full) {
       zoomRange = null;
       zoomFollowsRight = false;
@@ -275,6 +372,9 @@
     };
     const plotW = Math.max(1, width - pad.left - pad.right);
     const plotH = Math.max(1, height - pad.top - pad.bottom);
+    const stateLaneH = Math.min((compact ? 18 : 22) * scale, Math.max(0, plotH * 0.18));
+    const stateInset = 5 * scale;
+    const axisY = pad.top + plotH;
     const xFor = (timeMs) => pad.left + ((timeMs - range.startMs) / range.spanMs) * plotW;
     const yFor = (value) => pad.top + (1 - ((value - yMin) / span)) * plotH;
 
@@ -336,7 +436,7 @@
       ctx.lineTo(x, pad.top + plotH);
       ctx.stroke();
       ctx.textAlign = i === 0 ? 'left' : (i === xTicks ? 'right' : 'center');
-      ctx.fillText(formatTime(timeMs), x, pad.top + plotH + 8 * scale);
+      ctx.fillText(formatTime(timeMs), x, axisY + 8 * scale);
     }
 
     ctx.strokeStyle = colors.text;
@@ -344,7 +444,8 @@
     ctx.beginPath();
     ctx.moveTo(pad.left, pad.top);
     ctx.lineTo(pad.left, pad.top + plotH);
-    ctx.lineTo(pad.left + plotW, pad.top + plotH);
+    ctx.moveTo(pad.left, axisY);
+    ctx.lineTo(pad.left + plotW, axisY);
     ctx.stroke();
 
     ctx.fillStyle = colors.text;
@@ -360,6 +461,44 @@
       ctx.fillText('Temperature, °C', 0, 0);
       ctx.restore();
     }
+
+    const drawHysteresisBand = () => {
+      const bandSamples = plotSamples.filter((sample) => (
+        Number.isFinite(sample.target) &&
+        Number.isFinite(sample.hysteresis) &&
+        sample.hysteresis > 0
+      ));
+      if (bandSamples.length < 1) return;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(pad.left, pad.top, plotW, plotH);
+      ctx.clip();
+      ctx.fillStyle = colors.hysteresis;
+      ctx.beginPath();
+      bandSamples.forEach((sample, index) => {
+        const x = xFor(sample.timeMs);
+        const y = yFor(sample.target + sample.hysteresis);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      bandSamples.slice().reverse().forEach((sample) => {
+        ctx.lineTo(xFor(sample.timeMs), yFor(sample.target));
+      });
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = colors.target;
+      ctx.globalAlpha = 0.42;
+      ctx.setLineDash([5 * scale, 5 * scale]);
+      ctx.beginPath();
+      bandSamples.forEach((sample, index) => {
+        const x = xFor(sample.timeMs);
+        const y = yFor(sample.target + sample.hysteresis);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.restore();
+    };
 
     const drawLine = (key, color, allowGaps) => {
       ctx.strokeStyle = color;
@@ -393,8 +532,107 @@
       ctx.stroke();
       ctx.restore();
     };
+    const drawStateLane = () => {
+      const rowGap = 2 * scale;
+      const rowH = Math.max(2 * scale, Math.min(4 * scale, (stateLaneH - rowGap) / 2));
+      const laneTop = pad.top + plotH - rowH * 2 - rowGap - stateInset;
+      const rows = [
+        { key: 'peltierRunning', color: colors.peltier, y: laneTop },
+        { key: 'fanRunning', color: colors.fan, y: laneTop + rowH + rowGap }
+      ];
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(pad.left, laneTop, plotW, rowH * 2 + rowGap);
+      ctx.clip();
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = colors.grid;
+      rows.forEach((row) => ctx.fillRect(pad.left, row.y, plotW, rowH));
+      ctx.globalAlpha = 1;
+      rows.forEach((row) => {
+        ctx.fillStyle = row.color;
+        plotSamples.forEach((sample, index) => {
+          if (!sample[row.key]) return;
+          const next = plotSamples[index + 1];
+          const start = clamp(sample.timeMs, range.startMs, range.endMs);
+          const end = next ? clamp(next.timeMs, range.startMs, range.endMs) : start;
+          if (end <= start) return;
+          ctx.globalAlpha = row.key === 'fanRunning' && sample.fanRunOnActive ? 0.52 : 0.82;
+          ctx.fillRect(xFor(start), row.y, Math.max(1, xFor(end) - xFor(start)), rowH);
+        });
+      });
+      ctx.restore();
+    };
+    const drawCurrentTemperatureMarker = () => {
+      const latest = chartSamples.slice().reverse().find((sample) => (
+        Number.isFinite(sample.temperature) && !sample.disconnected
+      ));
+      if (!latest || latest.timeMs < range.startMs || latest.timeMs > range.endMs) return;
+      const y = yFor(latest.temperature);
+      const x = clamp(xFor(latest.timeMs), pad.left, pad.left + plotW);
+      ctx.save();
+      ctx.strokeStyle = colors.current;
+      ctx.lineWidth = 1 * scale;
+      ctx.setLineDash([3 * scale, 5 * scale]);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const label = latest.temperature.toFixed(1) + ' °C';
+      ctx.font = String(11 * scale) + 'px system-ui, sans-serif';
+      const labelW = ctx.measureText(label).width + 8 * scale;
+      const labelH = 18 * scale;
+      const labelX = Math.max(2 * scale, pad.left - labelW - 4 * scale);
+      const labelY = clamp(y - labelH / 2, pad.top, pad.top + plotH - labelH);
+      ctx.fillStyle = colors.background;
+      ctx.fillRect(labelX, labelY, labelW, labelH);
+      ctx.strokeStyle = colors.current;
+      ctx.strokeRect(labelX, labelY, labelW, labelH);
+      ctx.fillStyle = colors.current;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, labelX + labelW / 2, labelY + labelH / 2);
+      ctx.restore();
+    };
+    const drawPrediction = () => {
+      if (!prediction || !prediction.points || prediction.points.length < 2) return;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(pad.left, pad.top, plotW, plotH);
+      ctx.clip();
+      ctx.strokeStyle = colors.prediction;
+      ctx.lineWidth = 2 * scale;
+      ctx.setLineDash([7 * scale, 5 * scale]);
+      ctx.beginPath();
+      prediction.points.forEach((sample, index) => {
+        const x = xFor(sample.timeMs);
+        const y = yFor(sample.temperature);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const eta = prediction.points[prediction.points.length - 1];
+      if (eta.timeMs >= range.startMs && eta.timeMs <= range.endMs) {
+        const x = xFor(eta.timeMs);
+        const y = yFor(eta.temperature);
+        ctx.fillStyle = colors.prediction;
+        ctx.beginPath();
+        ctx.arc(x, y, 3.5 * scale, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.font = String(11 * scale) + 'px system-ui, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText('ETA ' + formatTime(eta.timeMs), Math.min(x + 7 * scale, pad.left + plotW - 62 * scale), y - 5 * scale);
+      }
+      ctx.restore();
+    };
+    drawHysteresisBand();
     drawLine('target', colors.target, false);
+    drawPrediction();
     drawLine('temperature', colors.temperature, true);
+    drawCurrentTemperatureMarker();
+    drawStateLane();
 
     if (full) {
       ctx.textBaseline = 'middle';
@@ -405,9 +643,13 @@
       [
         ['Filtered temperature', colors.temperature],
         ['Target temperature', colors.target],
+        ['Hysteresis band', colors.target],
+        ['Peltier', colors.peltier],
+        ['Fan', colors.fan],
+        ...(predictionEnabled ? [['Prediction', colors.prediction]] : []),
         ['Sensor unavailable', colors.disconnected]
       ].forEach((item, index) => {
-        const x = pad.left + index * 230;
+        const x = pad.left + index * 190;
         const y = 42;
         ctx.fillStyle = item[1];
         ctx.fillRect(x, y - 2, 34, 4);
@@ -436,9 +678,12 @@
     const geometry = drawChartInto(canvas, false);
     if (chartWindow) {
       const range = chartRange(false);
+      const prediction = predictionEnabled ? buildTemperaturePrediction() : null;
       chartWindow.textContent = zoomRange
         ? 'Zoom ' + formatTime(range.startMs) + ' to ' + formatTime(range.endMs)
-        : 'Startup to ' + formatTime(latestChartTime());
+        : (prediction
+            ? 'Startup to ' + formatTime(latestChartTime()) + ' / ETA ' + formatTime(prediction.etaMs)
+            : 'Startup to ' + formatTime(latestChartTime()));
     }
     if (chartResetZoom) {
       chartResetZoom.disabled = !zoomRange;
@@ -451,7 +696,10 @@
     return geometry;
   };
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
-  const chartDisplayEnd = () => Math.max(minChartWindowMs, latestChartTime());
+  const chartDisplayEnd = () => {
+    const prediction = predictionEnabled ? buildTemperaturePrediction() : null;
+    return Math.max(minChartWindowMs, latestChartTime(), prediction ? prediction.etaMs : 0);
+  };
   const zoomConstraintEnd = (spanMs) => Math.max(Math.max(1000, spanMs), latestChartTime());
   const isChartRightEdge = (endMs, fullEnd, spanMs) => (
     Math.abs(endMs - fullEnd) <= Math.max(1500, spanMs * 0.002)
@@ -497,19 +745,26 @@
     tooltip.innerHTML = [
       '<strong>' + formatTime(point.sample.timeMs) + '</strong>',
       '<span>Temperature: ' + formatTemperature(point.sample.temperature) + '</span>',
-      '<span>Target: ' + formatTemperature(point.sample.target) + '</span>'
+      '<span>Target: ' + formatTemperature(point.sample.target) + '</span>',
+      '<span>Hys: ' + formatTemperature(point.sample.hysteresis) + '</span>',
+      '<span>Peltier: ' + (point.sample.peltierRunning ? 'ON' : 'OFF') + '</span>',
+      '<span>Fan: ' + (point.sample.fanRunning ? (point.sample.fanRunOnActive ? 'RUN-ON' : 'ON') : 'OFF') + '</span>'
     ].join('');
     tooltip.style.left = Math.min(point.cssX + 12, tooltip.parentElement.clientWidth - 150) + 'px';
     tooltip.style.top = Math.max(8, point.cssY - 52) + 'px';
     tooltip.classList.remove('hidden');
   };
   const downloadCsvFromSamples = () => {
-    const rows = [['timestamp_ms', 'filtered_temperature_c', 'target_temperature_c', 'sensor_status', 'sensor_valid', 'sensor_disconnected', 'flags']];
+    const rows = [['timestamp_ms', 'filtered_temperature_c', 'target_temperature_c', 'hysteresis_c', 'peltier_running', 'fan_running', 'fan_runon_active', 'sensor_status', 'sensor_valid', 'sensor_disconnected', 'flags']];
     chartSamples.forEach((sample) => {
       rows.push([
         Math.round(sample.timeMs),
         Number.isFinite(sample.temperature) ? sample.temperature.toFixed(1) : '',
         Number.isFinite(sample.target) ? sample.target.toFixed(1) : '',
+        Number.isFinite(sample.hysteresis) ? sample.hysteresis.toFixed(1) : '',
+        sample.peltierRunning ? '1' : '0',
+        sample.fanRunning ? '1' : '0',
+        sample.fanRunOnActive ? '1' : '0',
         sample.status || (sample.disconnected ? 'unavailable' : 'ok'),
         sample.sensorValid === false || sample.disconnected ? '0' : '1',
         sample.disconnected ? '1' : '0',
@@ -592,6 +847,25 @@
     zoomRange = null;
     zoomFollowsRight = false;
     (samples || []).forEach(pushChartSample);
+    drawTemperatureChart();
+  };
+  const setPredictionEnabled = (enabled) => {
+    predictionEnabled = Boolean(enabled);
+    try {
+      if (window.localStorage) {
+        window.localStorage.setItem(predictionStorageKey, predictionEnabled ? '1' : '0');
+      }
+    } catch (error) {
+      // Local storage can be unavailable in private or embedded contexts.
+    }
+    const toggle = document.getElementById('chartPredictionToggle');
+    if (toggle) {
+      toggle.textContent = predictionEnabled ? 'Prediction ON' : 'Prediction OFF';
+      toggle.setAttribute('aria-pressed', predictionEnabled ? 'true' : 'false');
+      toggle.title = predictionEnabled
+        ? 'Hide browser-side temperature prediction'
+        : 'Show browser-side temperature prediction';
+    }
     drawTemperatureChart();
   };
   const attachChartInteractions = (chartCanvas) => {
@@ -759,106 +1033,9 @@
     attachInteractions: attachChartInteractions,
     downloadPng,
     downloadCsv: downloadCsvFromSamples,
+    setPredictionEnabled,
     samples: chartSamples
   };
-  const demoElapsedMs = () => (
-    demoChartWarmupMs + Math.floor((Date.now() - startedAt) * demoTimeScale)
-  );
-  const fallbackStatus = (timeMs = demoElapsedMs()) => {
-    const targetC = 5.0 +
-      Math.sin(timeMs / 90000) * 0.65 +
-      Math.sin(timeMs / 31000) * 0.18;
-    const rawTemperatureC = targetC +
-      Math.sin(timeMs / 42000 + 1.1) * 0.78 +
-      Math.sin(timeMs / 11500) * 0.14;
-    const filteredTemperatureC = targetC +
-      Math.sin((timeMs - 1800) / 42000 + 1.1) * 0.64 +
-      Math.sin(timeMs / 16500) * 0.08;
-    const disconnectPhaseMs = timeMs % 95000;
-    const disconnected = disconnectPhaseMs > 61000 && disconnectPhaseMs < 69000;
-    const peltierRunning = !disconnected && filteredTemperatureC > targetC + 0.08;
-    const fanRunOnActive = !peltierRunning && (timeMs % 18000) < 6500;
-    return {
-      temperatureC: disconnected ? null : rawTemperatureC,
-      filteredTemperatureC: disconnected ? null : filteredTemperatureC,
-      hasTemperature: !disconnected,
-      sensorDisconnected: disconnected,
-      updateCount: Math.floor(timeMs / demoSampleIntervalMs),
-      peltierRunning,
-      fanRunning: peltierRunning || fanRunOnActive,
-      fanRunOnActive,
-      fanRunOnRemainingMs: fanRunOnActive ? 6500 - (timeMs % 18000) : 0,
-      targetC,
-      hysteresisC: 0.1,
-      measurementIntervalMs: demoSampleIntervalMs,
-      fanRunOnMs: 30000,
-      uptimeMs: timeMs,
-      accessPointSsid: 'CoolingController',
-      accessPointIp: '',
-      stationSsid: '',
-      stationPasswordSet: false,
-      stationConnected: false,
-      stationStatus: 'disabled',
-      stationIp: '',
-      stationRssi: 0,
-      otaEnabled: true,
-      otaStarted: false,
-      otaUpdating: false,
-      otaProgress: 0,
-      otaStatus: 'waiting',
-      otaHostname: 'cooling-controller',
-      otaPasswordSet: false,
-      otaLastError: '',
-      devMode: false,
-      demo: true
-    };
-  };
-  const syncDemoChart = (latestStatus) => {
-    if (!latestStatus.demo || hasRealStatus) return;
-    const latestMs = sampleTimeMs(latestStatus);
-    const startMs = demoChartSeeded || chartSamples.length
-      ? lastChartUptimeMs + demoSampleIntervalMs
-      : Math.max(0, latestMs - demoChartWarmupMs);
-    for (let timeMs = startMs; timeMs <= latestMs; timeMs += demoSampleIntervalMs) {
-      addChartSample(fallbackStatus(timeMs));
-    }
-    addChartSample(latestStatus);
-    demoChartSeeded = true;
-  };
-  const mockFromDevState = (devState, elapsedMs) => ({
-    temperatureC: Number(devState.temperatureC) || 0,
-    filteredTemperatureC: Number(devState.temperatureC) || 0,
-    hasTemperature: Boolean(devState.hasTemperature),
-    sensorDisconnected: Boolean(devState.sensorDisconnected),
-    updateCount: Number(devState.updateCount) || 0,
-    peltierRunning: Boolean(devState.peltierRunning),
-    fanRunning: Boolean(devState.fanRunning),
-    fanRunOnActive: Boolean(devState.fanRunOnActive),
-    fanRunOnRemainingMs: Number(devState.fanRunOnRemainingMs) || 0,
-    targetC: 5.0,
-    hysteresisC: 0.1,
-    measurementIntervalMs: 500,
-    fanRunOnMs: 30000,
-    uptimeMs: elapsedMs,
-    accessPointSsid: 'CoolingController',
-    accessPointIp: '',
-    stationSsid: '',
-    stationPasswordSet: false,
-    stationConnected: false,
-    stationStatus: 'disabled',
-    stationIp: '',
-    stationRssi: 0,
-    otaEnabled: true,
-    otaStarted: false,
-    otaUpdating: false,
-    otaProgress: 0,
-    otaStatus: 'waiting',
-    otaHostname: 'cooling-controller',
-    otaPasswordSet: false,
-    otaLastError: '',
-    devMode: true,
-    demo: true
-  });
   const pageUrl = (ip) => ip ? 'http://' + ip + '/' : '--';
   const otaStatusText = (data) => {
     if (!data.otaEnabled) return 'Disabled';
@@ -882,7 +1059,6 @@
   };
 
   document.addEventListener('DOMContentLoaded', () => {
-    const demoBadge = document.getElementById('demoBadge');
     const settingsForm = document.getElementById('settingsForm');
     const settingsOverlay = document.getElementById('settingsOverlay');
     const settingsOpen = document.getElementById('settingsOpen');
@@ -898,6 +1074,7 @@
     const forgetStationNetworkInput = document.getElementById('forgetStationNetworkInput');
     const forgetStationNetwork = document.getElementById('forgetStationNetwork');
     const chartCanvas = document.getElementById('temperatureChart');
+    const chartPredictionToggle = document.getElementById('chartPredictionToggle');
     const chartResetZoom = document.getElementById('chartResetZoom');
     const chartDownloadPng = document.getElementById('chartDownloadPng');
     const chartDownloadCsv = document.getElementById('chartDownloadCsv');
@@ -1033,12 +1210,8 @@
         }
         renderNetworks(Array.isArray(data.networks) ? data.networks : []);
       } catch (error) {
-        renderNetworks([
-          { ssid: 'Kitchen WiFi', rssi: -48, channel: 6, encrypted: true },
-          { ssid: 'Workshop', rssi: -66, channel: 11, encrypted: true },
-          { ssid: 'Guest', rssi: -78, channel: 1, encrypted: false }
-        ]);
-        networkScanState.textContent = 'Demo scan';
+        networkList.textContent = '';
+        networkScanState.textContent = 'Scan unavailable';
       } finally {
         if (networkScanState.textContent !== 'Still scanning...' && networkScanState.textContent !== 'Scanning...') {
           scanNetworks.disabled = false;
@@ -1065,6 +1238,13 @@
       resetChartZoom();
       event.currentTarget.blur();
     });
+    setPredictionEnabled(loadPredictionPreference());
+    if (chartPredictionToggle) {
+      chartPredictionToggle.addEventListener('click', (event) => {
+        setPredictionEnabled(!predictionEnabled);
+        event.currentTarget.blur();
+      });
+    }
     chartDownloadPng.addEventListener('click', downloadPng);
     chartDownloadCsv.addEventListener('click', downloadCsv);
     attachChartInteractions(chartCanvas);
@@ -1139,21 +1319,33 @@
       if (event.key === 'Escape' && settingsOverlay.classList.contains('open')) closeSettings();
     });
     async function loadStatus() {
-      try {
-        const res = await fetchWithTimeout('/api/status', { cache: 'no-store' }, statusFetchTimeoutMs);
-        if (!res.ok) throw new Error('status unavailable');
-        const data = await res.json();
-        data.demo = false;
-        return data;
-      } catch (error) {
-        return fallbackStatus();
-      }
+      const res = await fetchWithTimeout('/api/status', { cache: 'no-store' }, statusFetchTimeoutMs);
+      if (!res.ok) throw new Error('status unavailable');
+      return res.json();
+    }
+    function renderStatusUnavailable() {
+      setText('temperature', '-- °C');
+      const sensor = document.getElementById('sensor');
+      sensor.textContent = 'UNAVAILABLE';
+      sensor.className = 'value small bad';
+      setState('peltier', false);
+      setState('fan', false);
+      setText('runon', 'OFF');
+      setText('count', '--');
+      setText('uptime', '--');
+      setText('wifi', 'Status unavailable');
+      setText('ota', 'Status unavailable');
+      drawTemperatureChart();
     }
     async function refresh() {
-      const data = await loadStatus();
-      if (data.demo) syncDemoChart(data);
-      else addChartSample(data);
-      demoBadge.classList.toggle('hidden', !data.demo);
+      let data;
+      try {
+        data = await loadStatus();
+      } catch (error) {
+        renderStatusUnavailable();
+        return;
+      }
+      addChartSample(data);
       const filteredTemperature = Number(data.filteredTemperatureC ?? data.temperatureC);
       setText('temperature', data.hasTemperature && !data.sensorDisconnected ? formatTemperature(filteredTemperature) : '-- °C');
       const sensor = document.getElementById('sensor');

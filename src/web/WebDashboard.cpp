@@ -242,6 +242,8 @@ void WebDashboard::handlePage()
     server_.send(404, "text/plain", "Not found");
     return;
   }
+  server_.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server_.sendHeader("Pragma", "no-cache");
   server_.send_P(200, "text/html; charset=utf-8", page);
 }
 
@@ -417,6 +419,8 @@ void WebDashboard::handleNotFound()
 {
   const char *page = webPageForPath(server_.uri());
   if (page != nullptr) {
+    server_.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    server_.sendHeader("Pragma", "no-cache");
     server_.send_P(200, "text/html; charset=utf-8", page);
     return;
   }
@@ -495,7 +499,15 @@ String WebDashboard::historyJson() const
   json += kTemperatureHistoryChangeCx10;
   json += ",\"disconnectedFlag\":";
   json += kTemperatureHistoryDisconnectedFlag;
-  json += ",\"fields\":[\"uptimeMs\",\"temperatureCx10\",\"targetCx10\",\"flags\",\"sensorValid\",\"sensorDisconnected\"]";
+  json += ",\"peltierFlag\":";
+  json += kTemperatureHistoryPeltierFlag;
+  json += ",\"fanFlag\":";
+  json += kTemperatureHistoryFanFlag;
+  json += ",\"fanRunOnFlag\":";
+  json += kTemperatureHistoryFanRunOnFlag;
+  json += ",\"hysteresisC\":";
+  json += settings_.hysteresisC;
+  json += ",\"fields\":[\"uptimeMs\",\"temperatureCx10\",\"targetCx10\",\"flags\",\"sensorValid\",\"sensorDisconnected\",\"hysteresisCx10\",\"peltierRunning\",\"fanRunning\",\"fanRunOnActive\"]";
   json += ",\"series\":[{\"id\":\"probe1\",\"label\":\"Filtered temperature\",\"unit\":\"C\",\"points\":[";
   for (size_t i = 0; i < temperatureHistoryCount_; ++i) {
     if (i > 0) {
@@ -506,6 +518,11 @@ String WebDashboard::historyJson() const
     const TemperatureHistorySample &sample = temperatureHistory_[index];
     const bool disconnected =
         (sample.flags & kTemperatureHistoryDisconnectedFlag) != 0;
+    const bool peltierRunning =
+        (sample.flags & kTemperatureHistoryPeltierFlag) != 0;
+    const bool fanRunning = (sample.flags & kTemperatureHistoryFanFlag) != 0;
+    const bool fanRunOnActive =
+        (sample.flags & kTemperatureHistoryFanRunOnFlag) != 0;
     json += "[";
     json += sample.uptimeMs;
     json += ",";
@@ -518,6 +535,14 @@ String WebDashboard::historyJson() const
     json += disconnected ? 0 : 1;
     json += ",";
     json += disconnected ? 1 : 0;
+    json += ",";
+    json += temperatureToCx10(settings_.hysteresisC);
+    json += ",";
+    json += peltierRunning ? 1 : 0;
+    json += ",";
+    json += fanRunning ? 1 : 0;
+    json += ",";
+    json += fanRunOnActive ? 1 : 0;
     json += "]";
   }
   json += "]}]}";
@@ -528,13 +553,18 @@ String WebDashboard::historyCsv() const
 {
   String csv;
   csv.reserve(96 + temperatureHistoryCount_ * 44);
-  csv += "timestamp_ms,filtered_temperature_c,target_temperature_c,sensor_status,sensor_valid,sensor_disconnected,flags\n";
+  csv += "timestamp_ms,filtered_temperature_c,target_temperature_c,hysteresis_c,peltier_running,fan_running,fan_runon_active,sensor_status,sensor_valid,sensor_disconnected,flags\n";
   for (size_t i = 0; i < temperatureHistoryCount_; ++i) {
     const size_t index =
         (temperatureHistoryStart_ + i) % kTemperatureHistoryCapacity;
     const TemperatureHistorySample &sample = temperatureHistory_[index];
     const bool disconnected =
         (sample.flags & kTemperatureHistoryDisconnectedFlag) != 0;
+    const bool peltierRunning =
+        (sample.flags & kTemperatureHistoryPeltierFlag) != 0;
+    const bool fanRunning = (sample.flags & kTemperatureHistoryFanFlag) != 0;
+    const bool fanRunOnActive =
+        (sample.flags & kTemperatureHistoryFanRunOnFlag) != 0;
     csv += sample.uptimeMs;
     csv += ",";
     if (!disconnected) {
@@ -542,6 +572,14 @@ String WebDashboard::historyCsv() const
     }
     csv += ",";
     csv += String(static_cast<float>(sample.targetCx10) / 10.0F, 1);
+    csv += ",";
+    csv += String(settings_.hysteresisC, 1);
+    csv += ",";
+    csv += peltierRunning ? "1" : "0";
+    csv += ",";
+    csv += fanRunning ? "1" : "0";
+    csv += ",";
+    csv += fanRunOnActive ? "1" : "0";
     csv += ",";
     csv += disconnected ? "unavailable" : "ok";
     csv += ",";
@@ -1330,6 +1368,15 @@ void WebDashboard::recordTemperatureHistory(const DashboardSnapshot &snapshot,
   sample.temperatureCx10 = disconnected ? 0 : temperatureCx10;
   sample.targetCx10 = targetCx10;
   sample.flags = disconnected ? kTemperatureHistoryDisconnectedFlag : 0U;
+  if (snapshot.coolingState.peltierRunning) {
+    sample.flags |= kTemperatureHistoryPeltierFlag;
+  }
+  if (snapshot.coolingState.fanRunning) {
+    sample.flags |= kTemperatureHistoryFanFlag;
+  }
+  if (snapshot.coolingState.fanRunOnActive) {
+    sample.flags |= kTemperatureHistoryFanRunOnFlag;
+  }
   appendTemperatureHistorySample(sample);
 }
 

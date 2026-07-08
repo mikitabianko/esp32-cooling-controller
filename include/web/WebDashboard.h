@@ -53,10 +53,22 @@ public:
   IPAddress ipAddress() const;
 
 private:
-  static constexpr size_t kTemperatureHistoryCapacity = 720;
+  // Static DRAM linker limit observed for this ESP32 build; the remaining RAM is
+  // still needed by heap users such as WiFi, WebServer, and response strings.
+  static constexpr size_t kEsp32StaticDramLimitBytes = 124580;
+  static constexpr size_t kMeasuredStaticRamWithoutHistoryBytes = 50432;
+  static constexpr size_t kTemperatureHistoryRamBudgetBytes =
+      ((kEsp32StaticDramLimitBytes - kMeasuredStaticRamWithoutHistoryBytes) *
+       9) /
+      10;
+  static constexpr size_t kTemperatureHistoryCapacity =
+      kTemperatureHistoryRamBudgetBytes / sizeof(TemperatureHistorySample);
   static constexpr unsigned long kTemperatureHistoryKeepaliveMs = 30000;
   static constexpr int16_t kTemperatureHistoryChangeCx10 = 1;
   static constexpr uint8_t kTemperatureHistoryDisconnectedFlag = 1U;
+  static constexpr uint8_t kTemperatureHistoryPeltierFlag = 2U;
+  static constexpr uint8_t kTemperatureHistoryFanFlag = 4U;
+  static constexpr uint8_t kTemperatureHistoryFanRunOnFlag = 8U;
 
   void handlePage();
   void handleStatus();

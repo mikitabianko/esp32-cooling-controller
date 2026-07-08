@@ -37,23 +37,43 @@ DEMO_NETWORKS = [
 
 class DashboardState:
     def __init__(self):
-        self.started_at = monotonic()
+        self.started_at = monotonic() - 8 * 60
         self.settings = dict(DEFAULT_SETTINGS)
+
+    def cooling_temperature(self, uptime_ms):
+        target_c = float(self.settings["targetC"])
+        elapsed_s = max(0.0, uptime_ms / 1000.0)
+        # Deterministic cooling curve: high enough above target and steadily falling
+        # so the browser-side prediction can fit a useful ETA in local dev.
+        cooling_curve = 0.35 + 3.2 * math.exp(-elapsed_s / 620.0)
+        ripple_scale = min(1.0, max(0.18, cooling_curve / 2.4))
+        thermal_wave = 0.16 * ripple_scale * math.sin(elapsed_s / 52.0)
+        sensor_ripple = 0.035 * ripple_scale * math.sin(elapsed_s / 11.0 + 0.8)
+        return target_c + cooling_curve + thermal_wave + sensor_ripple
+
+    def cooling_status(self, temperature_c):
+        target_c = float(self.settings["targetC"])
+        hysteresis_c = float(self.settings["hysteresisC"])
+        peltier_running = temperature_c > target_c + hysteresis_c
+        fan_run_on_active = not peltier_running and temperature_c > target_c + 0.05
+        return {
+            "peltierRunning": peltier_running,
+            "fanRunning": peltier_running or fan_run_on_active,
+            "fanRunOnActive": fan_run_on_active,
+        }
 
     def status(self):
         uptime_ms = int((monotonic() - self.started_at) * 1000)
-        cycle = uptime_ms // 7000
-        peltier = cycle % 2 == 0
-        run_on = not peltier and (uptime_ms // 3000) % 4 == 0
+        temperature_c = self.cooling_temperature(uptime_ms)
+        cooling = self.cooling_status(temperature_c)
         status = {
-            "temperatureC": 5.4,
+            "temperatureC": temperature_c,
+            "filteredTemperatureC": temperature_c,
             "hasTemperature": True,
             "sensorDisconnected": False,
             "updateCount": uptime_ms // 1000,
-            "peltierRunning": peltier,
-            "fanRunning": peltier or run_on,
-            "fanRunOnActive": run_on,
-            "fanRunOnRemainingMs": max(0, 12000 - (uptime_ms % 12000)),
+            **cooling,
+            "fanRunOnRemainingMs": 12000 if cooling["fanRunOnActive"] else 0,
         }
 
         return {
@@ -112,13 +132,40 @@ class DashboardState:
         start_ms = max(0, uptime_ms - 30 * 60 * 1000)
         step_ms = 10000
         points = []
+        target_c = float(self.settings["targetC"])
+        hysteresis_c = float(self.settings["hysteresisC"])
         for sample_ms in range(start_ms, uptime_ms + 1, step_ms):
-            temperature_c = 5.4 + math.sin(sample_ms / 210000) * 0.8
-            points.append([sample_ms, round(temperature_c * 10), 0])
+            temperature_c = self.cooling_temperature(sample_ms)
+            cooling = self.cooling_status(temperature_c)
+            points.append([
+                sample_ms,
+                round(temperature_c * 10),
+                round(target_c * 10),
+                0,
+                1,
+                0,
+                round(hysteresis_c * 10),
+                1 if cooling["peltierRunning"] else 0,
+                1 if cooling["fanRunning"] else 0,
+                1 if cooling["fanRunOnActive"] else 0,
+            ])
         return {
             "ok": True,
             "historyMs": 2 * 60 * 60 * 1000,
             "sampleIntervalMs": step_ms,
+            "hysteresisC": hysteresis_c,
+            "fields": [
+                "uptimeMs",
+                "temperatureCx10",
+                "targetCx10",
+                "flags",
+                "sensorValid",
+                "sensorDisconnected",
+                "hysteresisCx10",
+                "peltierRunning",
+                "fanRunning",
+                "fanRunOnActive",
+            ],
             "series": [
                 {
                     "id": "probe1",
@@ -195,9 +242,12 @@ class WebDevHandler(SimpleHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
 
 
 def main():

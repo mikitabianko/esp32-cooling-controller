@@ -53,7 +53,8 @@ def routes_for(source_path):
 def local_asset_path(url):
     if not url.startswith("/"):
         return None
-    path = (WEB_DIR / url.lstrip("/")).resolve()
+    clean_url = url.split("?", 1)[0].split("#", 1)[0]
+    path = (WEB_DIR / clean_url.lstrip("/")).resolve()
     try:
         path.relative_to(WEB_DIR)
     except ValueError:
