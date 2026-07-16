@@ -1,0 +1,11 @@
+{
+  "name": "fw_app",
+  "version": "1.0.0",
+  "description": "Shared application feature context",
+  "build": { "srcDir": "src" },
+  "dependencies": {
+    "fw_core": "*",
+    "fw_network": "*",
+    "fw_telemetry": "*"
+  }
+}

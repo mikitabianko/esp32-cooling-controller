@@ -1,0 +1,18 @@
+{
+  "name": "cooling_feature",
+  "version": "1.0.0",
+  "description": "Cooling hardware, domain integration, API, display, and persistence",
+  "build": { "srcDir": "src" },
+  "dependencies": {
+    "cooling_domain": "*",
+    "fw_app": "*",
+    "fw_core": "*",
+    "fw_network": "*",
+    "fw_ota": "*",
+    "fw_telemetry": "*",
+    "fw_web": "*",
+    "DallasTemperature": "^4.0.6",
+    "Adafruit SSD1306": "^2.5.17",
+    "Adafruit GFX Library": "^1.12.6"
+  }
+}

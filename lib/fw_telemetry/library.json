@@ -1,0 +1,6 @@
+{
+  "name": "fw_telemetry",
+  "version": "1.0.0",
+  "description": "Fixed-capacity telemetry history containers",
+  "build": { "srcDir": "src" }
+}

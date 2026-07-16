@@ -1,0 +1,8 @@
+{
+  "name": "cooling_domain",
+  "version": "1.0.0",
+  "description": "Platform-independent cooling controller state machine",
+  "build": {
+    "srcDir": "src"
+  }
+}

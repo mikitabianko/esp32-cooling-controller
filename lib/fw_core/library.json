@@ -1,0 +1,6 @@
+{
+  "name": "fw_core",
+  "version": "1.0.0",
+  "description": "Shared framework time and debug helpers",
+  "build": { "srcDir": "src" }
+}

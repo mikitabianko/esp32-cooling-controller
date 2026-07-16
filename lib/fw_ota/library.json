@@ -1,0 +1,7 @@
+{
+  "name": "fw_ota",
+  "version": "1.0.0",
+  "description": "ArduinoOTA and HTTP firmware update services",
+  "build": { "srcDir": "src" },
+  "dependencies": { "fw_core": "*", "fw_web": "*" }
+}

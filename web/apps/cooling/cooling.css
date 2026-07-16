@@ -1,0 +1,9 @@
+:root {
+  --chart-peltier: #b15f1b;
+  --chart-fan: #2d8ab8;
+}
+
+[data-theme="dark"] {
+  --chart-peltier: #f0a45f;
+  --chart-fan: #7fc8ef;
+}

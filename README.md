@@ -54,6 +54,10 @@ first build.
 The DS18B20 data line expects the usual pull-up resistor between data and VCC.
 The relay module is configured as active-low (`LOW` = on, `HIGH` = off).
 
+### Wiring Diagram
+
+![ESP32 cooling controller wiring diagram](docs/images/electronics/cooling-controller-wiring-diagram.png)
+
 ## Default Settings
 
 | Setting | Default | Allowed range |
@@ -91,57 +95,203 @@ secret.
 ## Project Structure
 
 ```text
-include/
-  app/        Application orchestration interfaces
-  config/     Pins, defaults, and bounds
-  domain/     Testable cooling logic and settings model
-  hardware/   DS18B20 and relay adapters
-  ota/        ArduinoOTA service wrapper
-  storage/    Persistent settings via Preferences
-  ui/         OLED display view
-  web/        Dashboard server and generated HTML page header
 src/
-  app/        Application orchestration implementation
-  domain/     Logic without direct hardware access
-  hardware/   Concrete ESP32, sensor, and relay access
-  ota/        OTA setup, callbacks, and polling
-  storage/    Preferences integration
-  ui/         OLED rendering
-  web/        HTTP routes, JSON responses, and Wi-Fi handling
+  main.cpp              Product entry point
+  product/
+    CoolingFirmware.*   Explicit product composition
+lib/
+  fw_app/           Shared feature application context
+  fw_core/          Shared time, lifecycle, and debug helpers
+  fw_esp32/         ESP32 clock, restart, and NVS adapters
+  fw_network/       AP/STA lifecycle, reconnects, and scanning
+  fw_web/           HTTP host, router, and JSON helpers
+  fw_ota/           ArduinoOTA and HTTP firmware updates
+  fw_telemetry/     Fixed-capacity history storage
+  cooling_domain/   Platform-independent cooling state machine
+  cooling_feature/  Cooling hardware, persistence, display, API, and feature
+  blink_feature/    Reuse example with its own status application
 web/          Editable dashboard HTML, CSS, and JavaScript sources
 tools/        Build and local development helpers
 test/         Unity tests
 docs/         Project notes and media
 ```
 
-New modules should be placed by responsibility. Code in `domain/` should stay
-independent of concrete hardware libraries where possible, so it remains easy to
-test locally.
+New modules should be placed by responsibility. The `cooling_domain` library
+must remain independent of Arduino and concrete hardware libraries so it stays
+fully testable in the native environment.
+
+`CoolingFirmware` owns the shared clock, settings backend, network, web, OTA,
+restart, and telemetry services. It integrates cooling through one
+`CoolingFeature`, which receives only the shared services exposed by
+`AppContext`. Cooling-specific serialization and routes remain in `CoolingApi`.
+
+Every library has a `library.json` manifest and exposes headers only from its
+own `src/` directory. PlatformIO resolves the dependency graph from the product
+composition, while `src/main.cpp` only delegates Arduino setup and loop calls.
+
+The runtime composition is intentionally explicit:
+
+```text
+src/main.cpp
+  -> CoolingFirmware (composition root)
+       -> shared services: clock, settings, network, web, OTA, telemetry
+       -> CoolingFeature
+            -> cooling_domain (pure control rules)
+            -> hardware, storage, OLED, and cooling HTTP API adapters
+```
+
+This keeps product wiring in one place, lets features reuse the same services,
+and keeps control rules testable without an ESP32.
+
+## Adding Your Own Functionality
+
+Put new code in the narrowest layer that fits its responsibility:
+
+- Add calculations, state machines, and validation that do not need Arduino to
+  a platform-independent domain library such as `lib/cooling_domain/`.
+- Add reusable ESP32 or infrastructure integration to a focused `fw_*` library.
+- Add a product capability that coordinates hardware, persistence, APIs, or UI
+  as its own `*_feature` library.
+- Keep object construction and lifecycle ordering in the product composition,
+  such as `CoolingFirmware`.
+
+The following minimal example adds a periodic heartbeat feature with an HTTP
+endpoint. First create `lib/heartbeat_feature/library.json` and declare only
+the libraries used by its public API:
+
+```json
+{
+  "name": "heartbeat_feature",
+  "version": "1.0.0",
+  "build": { "srcDir": "src" },
+  "dependencies": {
+    "fw_app": "*",
+    "fw_core": "*",
+    "fw_telemetry": "*",
+    "fw_web": "*"
+  }
+}
+```
+
+Expose a small lifecycle interface from
+`lib/heartbeat_feature/src/heartbeat_feature/HeartbeatFeature.h`:
+
+```cpp
+#pragma once
+
+#include <stdint.h>
+#include <WebServer.h>
+
+#include "app/AppContext.h"
+#include "web/ApiRouter.h"
+
+class HeartbeatFeature {
+public:
+  void begin(AppContext &context);
+  void registerApi(ApiRouter &router);
+  void tick(uint32_t nowMs);
+
+private:
+  AppContext *context_ = nullptr;
+  WebServer *server_ = nullptr;
+  uint32_t lastBeatMs_ = 0;
+  uint32_t beatCount_ = 0;
+};
+```
+
+Implement it in `lib/heartbeat_feature/src/HeartbeatFeature.cpp`. Use the
+injected clock and services instead of constructing platform dependencies in
+the feature:
+
+```cpp
+#include "heartbeat_feature/HeartbeatFeature.h"
+
+void HeartbeatFeature::begin(AppContext &context)
+{
+  context_ = &context;
+  lastBeatMs_ = context.clock.nowMs();
+  context.telemetry.registerSource("heartbeat");
+}
+
+void HeartbeatFeature::registerApi(ApiRouter &router)
+{
+  server_ = &router.server();
+  router.get("/api/heartbeat", [this]() {
+    String json = "{\"beatCount\":";
+    json += beatCount_;
+    json += "}";
+    server_->send(200, "application/json", json);
+  });
+}
+
+void HeartbeatFeature::tick(uint32_t nowMs)
+{
+  if (static_cast<uint32_t>(nowMs - lastBeatMs_) < 1000U) {
+    return;
+  }
+  lastBeatMs_ = nowMs;
+  ++beatCount_;
+}
+```
+
+Finally, include `heartbeat_feature/HeartbeatFeature.h`, add a
+`HeartbeatFeature heartbeat_;` member to `CoolingFirmware`, and connect it to
+the existing lifecycle at these points:
+
+```cpp
+// CoolingFirmware::begin(), before network_.begin():
+heartbeat_.begin(context_);
+
+// CoolingFirmware::begin(), before web_.begin():
+heartbeat_.registerApi(web_.router());
+
+// CoolingFirmware::update(), using the existing nowMs value:
+heartbeat_.tick(nowMs);
+```
+
+Register routes before `web_.begin()`, keep `tick()` non-blocking, and use
+unsigned elapsed-time subtraction as shown so timers remain correct when
+`millis()` wraps. If the feature has substantial pure logic, move that logic to
+a separate domain library and add native Unity tests. For a complete reusable
+product example, follow `lib/blink_feature/` and its
+`examples/status_device/` composition.
 
 ## Web Dashboard
 
-The editable dashboard sources live in `web/`. During a PlatformIO build,
-`tools/embed_dashboard.py` inlines shared CSS/JavaScript assets and regenerates
-`include/web/WebDashboardPage.h`.
+The editable dashboard is split into reusable modules under `web/core/` and
+`web/system/`, while application-specific pages and scripts live under
+`web/apps/`. During a PlatformIO build, `tools/embed_dashboard.py` reads the
+selected application manifest, inlines its referenced CSS/JavaScript assets,
+and regenerates that product's web page header.
 
 Built-in routes:
 
 | Route | Purpose |
 | --- | --- |
-| `/` or `/dashboard.html` | Main dashboard |
+| `/`, `/dashboard.html`, or `/apps/cooling/dashboard` | Main dashboard |
 | `/api/status` | Live status JSON |
 | `/api/history` | Compact in-memory temperature history JSON |
+| `/api/history.csv` | Temperature history as CSV |
 | `/api/settings` | Read or save controller settings |
 | `/api/networks` | Scan nearby Wi-Fi networks and signal levels |
+| `/api/firmware` | Upload a compiled firmware image and reboot |
 
-To add a dashboard page:
+`/api/dev` is also available for the local dashboard simulation tooling.
 
-1. Create `web/example.html`.
-2. Include shared assets such as `/assets/app.css` and `/assets/app.js`.
-3. Optionally add a page-specific script, for example `/assets/example.js`.
+To add a web application:
 
-The local route becomes `/example`, and the page is embedded automatically on
-the next PlatformIO build.
+1. Create `web/apps/example/manifest.json` with `id`, `title`, and an
+   extensionless `entry` route.
+2. Create the matching HTML file, such as
+   `web/apps/example/dashboard.html` for an entry of
+   `/apps/example/dashboard`.
+3. Reference reusable `/core/*` and `/system/*` modules plus the application's
+   own `/apps/example/*` assets from that page.
+
+The manifest drives both embedded page generation and local route discovery.
+The selected embedded application, and the first application in local
+development, are also exposed through the compatibility aliases `/` and
+`/dashboard.html`.
 
 For local dashboard development without an ESP32:
 
@@ -151,9 +301,23 @@ python3 tools/web_dev_server.py
 
 The dashboard is served at `http://127.0.0.1:8080/` by default. If the port is
 busy, the helper tries the next available port unless `--no-port-fallback` is
-used. If the dashboard cannot reach `/api/status`, it automatically shows the
-local demo scene with simulated temperature readings, target changes, sensor
-disconnects, chart movement, and PNG/CSV export.
+used. The local API starts from the JSON contracts in `test/fixtures/api/` and
+adds dynamic temperature/history values, so local development and contract
+tests share the same response fields.
+
+## Reuse Example
+
+`lib/blink_feature/examples/status_device/` is an independent product that
+reuses the shared clock, NVS settings backend, AP/STA networking, HTTP host,
+OTA services, firmware upload, telemetry registry, and system dashboard
+modules. It exposes its own blink status and settings APIs and has no cooling
+dependency.
+
+Build it from the repository root:
+
+```sh
+pio run -d lib/blink_feature/examples/status_device
+```
 
 ## Build, Upload, and Monitor
 
@@ -205,8 +369,11 @@ Run the native test suite:
 pio test -e native
 ```
 
-The current tests cover the pure temperature/control helpers and verify that the
-dashboard HTML assets are embedded into the generated firmware header.
+The current tests cover the pure cooling state machine, fan run-on and timer
+overflow behavior, disconnected-sensor safety, cooling/network sanitization,
+fixed-capacity history retention, API response contracts, and generated
+dashboard embedding. Shared clock/settings interfaces and telemetry
+registration are also covered with native fakes.
 
 ## Notes
 

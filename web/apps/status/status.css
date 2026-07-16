@@ -1,0 +1,18 @@
+.status-led {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-led::before {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+}
+
+.status-led.on::before {
+  background: var(--ok);
+  box-shadow: 0 0 12px var(--ok);
+}

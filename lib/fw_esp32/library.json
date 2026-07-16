@@ -1,0 +1,7 @@
+{
+  "name": "fw_esp32",
+  "version": "1.0.0",
+  "description": "ESP32 platform service adapters",
+  "build": { "srcDir": "src" },
+  "dependencies": { "fw_core": "*" }
+}

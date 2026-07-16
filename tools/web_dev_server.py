@@ -4,6 +4,7 @@ from pathlib import Path
 from time import monotonic
 from urllib.parse import parse_qs
 import argparse
+import copy
 import json
 import math
 import sys
@@ -11,22 +12,51 @@ import sys
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 WEB_DIR = PROJECT_DIR / "web"
+FIXTURE_DIR = PROJECT_DIR / "test" / "fixtures" / "api"
 
-DEFAULT_SETTINGS = {
-    "targetC": 5.0,
-    "hysteresisC": 0.1,
-    "measurementIntervalMs": 500,
-    "fanRunOnMs": 30000,
-    "accessPointSsid": "CoolingController",
-    "accessPointIp": "192.168.4.1",
-    "stationSsid": "",
-    "stationPassword": "",
-    "stationPasswordSet": False,
-    "stationConnected": False,
-    "stationStatus": "disabled",
-    "stationIp": "",
-    "stationRssi": 0,
-}
+
+def load_json(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+STATUS_FIXTURE = load_json(FIXTURE_DIR / "status.json")
+SETTINGS_FIXTURE = load_json(FIXTURE_DIR / "settings.json")
+HISTORY_FIXTURE = load_json(FIXTURE_DIR / "history.json")
+BLINK_STATUS_FIXTURE = load_json(FIXTURE_DIR / "blink_status.json")
+BLINK_SETTINGS_FIXTURE = load_json(FIXTURE_DIR / "blink_settings.json")
+
+
+def load_applications():
+    applications = []
+    for manifest_path in sorted(WEB_DIR.glob("apps/*/manifest.json")):
+        manifest = load_json(manifest_path)
+        missing = [field for field in ("id", "title", "entry") if not manifest.get(field)]
+        if missing:
+            raise ValueError(f"{manifest_path}: missing fields: {', '.join(missing)}")
+        entry = manifest["entry"]
+        if not entry.startswith("/") or entry.endswith(".html"):
+            raise ValueError(
+                f"{manifest_path}: entry must be an absolute extensionless route"
+            )
+        page = web_path(entry + ".html")
+        if page is None:
+            raise ValueError(f"{manifest_path}: entry page does not exist: {entry}.html")
+        applications.append({**manifest, "page": page})
+    if not applications:
+        raise ValueError("No web application manifests found under web/apps/*")
+    return applications
+
+
+def web_path(url_path):
+    path = (WEB_DIR / url_path.lstrip("/")).resolve()
+    try:
+        path.relative_to(WEB_DIR)
+    except ValueError:
+        return None
+    return path if path.is_file() else None
+
+
+APPLICATIONS = load_applications()
 
 DEMO_NETWORKS = [
     {"ssid": "Kitchen WiFi", "rssi": -48, "channel": 6, "encrypted": True},
@@ -38,7 +68,11 @@ DEMO_NETWORKS = [
 class DashboardState:
     def __init__(self):
         self.started_at = monotonic() - 8 * 60
-        self.settings = dict(DEFAULT_SETTINGS)
+        self.settings = copy.deepcopy(SETTINGS_FIXTURE)
+        self.settings["stationPassword"] = ""
+        self.blink_started_at = monotonic()
+        self.blink_settings = copy.deepcopy(BLINK_SETTINGS_FIXTURE)
+        self.blink_settings["stationPassword"] = ""
 
     def cooling_temperature(self, uptime_ms):
         target_c = float(self.settings["targetC"])
@@ -66,7 +100,11 @@ class DashboardState:
         uptime_ms = int((monotonic() - self.started_at) * 1000)
         temperature_c = self.cooling_temperature(uptime_ms)
         cooling = self.cooling_status(temperature_c)
-        status = {
+        status = copy.deepcopy(STATUS_FIXTURE)
+        public_settings = self.public_settings()
+        public_settings.pop("ok", None)
+        status.update(public_settings)
+        status.update({
             "temperatureC": temperature_c,
             "filteredTemperatureC": temperature_c,
             "hasTemperature": True,
@@ -74,16 +112,12 @@ class DashboardState:
             "updateCount": uptime_ms // 1000,
             **cooling,
             "fanRunOnRemainingMs": 12000 if cooling["fanRunOnActive"] else 0,
-        }
-
-        return {
-            **status,
-            **self.public_settings(),
             "uptimeMs": uptime_ms,
-        }
+        })
+        return status
 
     def public_settings(self):
-        settings = dict(self.settings)
+        settings = copy.deepcopy(self.settings)
         settings.pop("stationPassword", None)
         settings["stationPasswordSet"] = bool(self.settings["stationPassword"])
         settings["stationStatus"] = (
@@ -149,32 +183,71 @@ class DashboardState:
                 1 if cooling["fanRunning"] else 0,
                 1 if cooling["fanRunOnActive"] else 0,
             ])
-        return {
-            "ok": True,
-            "historyMs": 2 * 60 * 60 * 1000,
-            "sampleIntervalMs": step_ms,
-            "hysteresisC": hysteresis_c,
-            "fields": [
-                "uptimeMs",
-                "temperatureCx10",
-                "targetCx10",
-                "flags",
-                "sensorValid",
-                "sensorDisconnected",
-                "hysteresisCx10",
-                "peltierRunning",
-                "fanRunning",
-                "fanRunOnActive",
-            ],
-            "series": [
-                {
-                    "id": "probe1",
-                    "label": "Probe 1",
-                    "unit": "C",
-                    "points": points,
-                }
-            ],
-        }
+        history = copy.deepcopy(HISTORY_FIXTURE)
+        history["hysteresisC"] = hysteresis_c
+        history["series"][0]["points"] = points
+        return history
+
+    def public_blink_settings(self):
+        settings = copy.deepcopy(self.blink_settings)
+        settings.pop("stationPassword", None)
+        settings["stationPasswordSet"] = bool(
+            self.blink_settings["stationPassword"]
+        )
+        settings["stationStatus"] = (
+            "connected"
+            if settings["stationConnected"]
+            else ("disabled" if not settings["stationSsid"] else "disconnected")
+        )
+        return settings
+
+    def blink_status(self):
+        uptime_ms = int((monotonic() - self.blink_started_at) * 1000)
+        interval_ms = int(self.blink_settings["blinkIntervalMs"])
+        toggle_count = uptime_ms // max(1, interval_ms)
+        status = copy.deepcopy(BLINK_STATUS_FIXTURE)
+        public_settings = self.public_blink_settings()
+        public_settings.pop("ok", None)
+        status.update(public_settings)
+        status.update(
+            {
+                "ledOn": toggle_count % 2 == 1,
+                "toggleCount": toggle_count,
+                "uptimeMs": uptime_ms,
+            }
+        )
+        return status
+
+    def save_blink_settings(self, form):
+        self.blink_settings["deviceName"] = read_string(
+            form, "deviceName", self.blink_settings["deviceName"]
+        ).strip()[:32] or "Status Device"
+        self.blink_settings["blinkIntervalMs"] = max(
+            100,
+            min(
+                60000,
+                read_int(
+                    form,
+                    "blinkIntervalMs",
+                    self.blink_settings["blinkIntervalMs"],
+                ),
+            ),
+        )
+        self.blink_settings["stationSsid"] = read_string(
+            form, "stationSsid", ""
+        ).strip()
+        forget_network = read_bool(form, "forgetStationNetwork", False)
+        station_password = read_string(form, "stationPassword", "")
+        if forget_network or not self.blink_settings["stationSsid"]:
+            self.blink_settings["stationSsid"] = ""
+            self.blink_settings["stationPassword"] = ""
+        elif station_password:
+            self.blink_settings["stationPassword"] = station_password
+        connected = bool(self.blink_settings["stationSsid"])
+        self.blink_settings["stationConnected"] = connected
+        self.blink_settings["stationIp"] = "192.168.1.89" if connected else ""
+        self.blink_settings["stationRssi"] = -54 if connected else 0
+        return self.public_blink_settings()
 
 
 def read_string(form, name, fallback):
@@ -211,7 +284,8 @@ class WebDevHandler(SimpleHTTPRequestHandler):
         page = page_for_route(clean_path)
         if page is not None:
             return str(page)
-        return str(WEB_DIR / clean_path.lstrip("/"))
+        asset = web_path(clean_path)
+        return str(asset if asset is not None else WEB_DIR / "__not_found__")
 
     def do_GET(self):
         if self.path == "/api/status":
@@ -226,6 +300,12 @@ class WebDevHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/networks":
             self.send_json(self.state.networks())
             return
+        if self.path == "/api/blink/status":
+            self.send_json(self.state.blink_status())
+            return
+        if self.path == "/api/blink/settings":
+            self.send_json(self.state.public_blink_settings())
+            return
         return super().do_GET()
 
     def do_POST(self):
@@ -234,6 +314,9 @@ class WebDevHandler(SimpleHTTPRequestHandler):
         form = parse_qs(body, keep_blank_values=True)
         if self.path == "/api/settings":
             self.send_json(self.state.save_settings(form))
+            return
+        if self.path == "/api/blink/settings":
+            self.send_json(self.state.save_blink_settings(form))
             return
         self.send_error(404, "Not found")
 
@@ -267,7 +350,10 @@ def main():
     pages = ", ".join(route for route in page_routes())
     print(f"Serving dashboard at {url}")
     print(f"Pages: {pages}")
-    print("API: /api/status, /api/history, /api/settings, /api/networks")
+    print(
+        "API: /api/status, /api/history, /api/settings, /api/networks, "
+        "/api/blink/status, /api/blink/settings"
+    )
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
@@ -302,25 +388,19 @@ def bind_server(host, preferred_port, allow_fallback):
 
 
 def page_for_route(path):
-    if path in ("/", "/dashboard.html"):
-        return WEB_DIR / "dashboard.html"
-    if path.endswith(".html"):
-        page = WEB_DIR / path.lstrip("/")
-    else:
-        page = WEB_DIR / f"{path.lstrip('/')}.html"
-    try:
-        page.resolve().relative_to(WEB_DIR)
-    except ValueError:
-        return None
-    return page if page.is_file() else None
+    for index, application in enumerate(APPLICATIONS):
+        routes = {application["entry"], application["entry"] + ".html"}
+        if index == 0:
+            routes.update(("/", "/dashboard.html"))
+        if path in routes:
+            return application["page"]
+    return None
 
 
 def page_routes():
-    routes = ["/"]
-    for page in sorted(WEB_DIR.glob("*.html")):
-        if page.name == "dashboard.html":
-            continue
-        routes.append("/" + page.stem)
+    routes = ["/", "/dashboard.html"]
+    for application in APPLICATIONS:
+        routes.append(application["entry"])
     return routes
 
 

@@ -1,0 +1,14 @@
+{
+  "name": "blink_feature",
+  "version": "1.0.0",
+  "description": "Minimal reusable status LED feature and HTTP API",
+  "build": { "srcDir": "src" },
+  "dependencies": {
+    "fw_app": "*",
+    "fw_core": "*",
+    "fw_network": "*",
+    "fw_ota": "*",
+    "fw_telemetry": "*",
+    "fw_web": "*"
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "fw_web",
+  "version": "1.0.0",
+  "description": "HTTP host, API router, and JSON helpers",
+  "build": { "srcDir": "src" }
+}

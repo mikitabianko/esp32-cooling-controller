@@ -1,14 +1,14 @@
 #include <Arduino.h>
-#include "app/CoolingApp.h"
+#include "product/CoolingFirmware.h"
 
-CoolingApp app;
+CoolingFirmware firmware;
 
 void setup()
 {
-  app.begin();
+  firmware.begin();
 }
 
 void loop()
 {
-  app.update();
+  firmware.update();
 }

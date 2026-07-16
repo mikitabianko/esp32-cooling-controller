@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "capacity": 8192,
+  "keepaliveMs": 30000,
+  "changeThresholdCx10": 1,
+  "disconnectedFlag": 1,
+  "peltierFlag": 2,
+  "fanFlag": 4,
+  "fanRunOnFlag": 8,
+  "hysteresisC": 0.1,
+  "fields": ["uptimeMs", "temperatureCx10", "targetCx10", "flags", "sensorValid", "sensorDisconnected", "hysteresisCx10", "peltierRunning", "fanRunning", "fanRunOnActive"],
+  "series": [{"id": "probe1", "label": "Filtered temperature", "unit": "C", "points": [[42000, 54, 50, 6, 1, 0, 1, 1, 1, 0]]}]
+}

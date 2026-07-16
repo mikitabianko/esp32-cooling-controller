@@ -1,46 +1,20 @@
+# PlatformIO libraries
 
-This directory is intended for project specific (private) libraries.
-PlatformIO will compile them to static libraries and link into the executable file.
+Each library exposes public headers only through its own `src/` directory and
+declares its direct dependencies in `library.json`.
 
-The source code of each library should be placed in a separate directory
-("lib/your_library_name/[Code]").
+| Library | Responsibility |
+| --- | --- |
+| `fw_app` | Shared feature application context |
+| `fw_core` | Shared time, lifecycle, and debug helpers |
+| `fw_esp32` | ESP32 clock, restart, and NVS adapters |
+| `fw_network` | AP/STA management, reconnects, and scanning |
+| `fw_web` | HTTP host, router, and JSON helpers |
+| `fw_ota` | ArduinoOTA and HTTP firmware update services |
+| `fw_telemetry` | Fixed-capacity telemetry history |
+| `cooling_domain` | Platform-independent cooling state machine |
+| `cooling_feature` | Cooling hardware, persistence, UI, API, and feature integration |
+| `blink_feature` | Minimal status LED feature and framework reuse example |
 
-For example, see the structure of the following example libraries `Foo` and `Bar`:
-
-|--lib
-|  |
-|  |--Bar
-|  |  |--docs
-|  |  |--examples
-|  |  |--src
-|  |     |- Bar.c
-|  |     |- Bar.h
-|  |  |- library.json (optional. for custom build options, etc) https://docs.platformio.org/page/librarymanager/config.html
-|  |
-|  |--Foo
-|  |  |- Foo.c
-|  |  |- Foo.h
-|  |
-|  |- README --> THIS FILE
-|
-|- platformio.ini
-|--src
-   |- main.c
-
-Example contents of `src/main.c` using Foo and Bar:
-```
-#include <Foo.h>
-#include <Bar.h>
-
-int main (void)
-{
-  ...
-}
-
-```
-
-The PlatformIO Library Dependency Finder will find automatically dependent
-libraries by scanning project source files.
-
-More information about PlatformIO Library Dependency Finder
-- https://docs.platformio.org/page/librarymanager/ldf.html
+Framework libraries must not include cooling headers. `cooling_domain` must not
+include framework, Arduino, or ESP32 headers.
